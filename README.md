@@ -54,6 +54,12 @@ first** — the game's own parser and validator remain the authority.
   CLI report shows verbatim. Cutting is blocked while the doc is dirty.
 - **Unregistered scan**: PNGs under `Assets/Graphics/sprites` that no
   instruction references; one click registers a sheet with a suggested id.
+- **Atlases (read-only)**: every descriptor under `Assets/Metadata` —
+  `type = "atlas"` free rects (portraits, symbols) and `type = "grid"`
+  indexed cells (the per-sheet descriptors) — rendered over its image with
+  sprite outlines, adaptive labels, hover hit-testing (gutters respected),
+  a clickable named-sprite roster, and bounds/duplicate lint. Read-only
+  until these files gain a CLI validator to gate a save with.
 - **Audit**: cross-references instructions × disk × `asset_pack --dry-run
   --list` — what ships, what doesn't, what's orphaned.
 
@@ -88,8 +94,9 @@ shell and say so.
 ## Tests
 
 ```bash
-npm test        # vitest: instruction round-trips, lint table, cutter math, audit
+npm test        # vitest: instruction round-trips, lint table, cutter math, audit, atlases
 npm run build   # tsc + vite build
+cd src-tauri && cargo test   # the shell commands against the real CLIs (skips if unbuilt)
 ```
 
 The atlas math (`src/atlas.ts`) mirrors the game's `src/bin/sprite_cutter.rs`
