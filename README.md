@@ -80,6 +80,11 @@ npm run tauri:dev
 Without the env vars, the binaries are looked up on PATH and the app asks you
 to pick the game repo folder on launch.
 
+Because Menage points at a *live* repo, a `cargo build` racing in the game
+workspace can unlink `sprite_cutter.exe` for a moment; the shell retries a
+NotFound spawn briefly before reporting it, so a click landing in that window
+doesn't fail spuriously.
+
 ### Web-only mode (read-only)
 
 ```bash

@@ -29,12 +29,38 @@ fn asset_pack_bin() -> String {
 
 /// Run a CLI in the game root; return stdout on success (stderr as fallback),
 /// or a combined error string so the UI can show the findings verbatim.
+///
+/// Spawn retries: Menage points at a LIVE repo — a `cargo build` racing in the
+/// game workspace unlinks `sprite_cutter.exe` for a moment, and a click landing
+/// in that window would fail with "file not found" even though nothing is
+/// wrong. A NotFound spawn is retried briefly before it is reported.
 fn run_cli(bin: &str, game_root: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(bin)
-        .args(args)
-        .current_dir(game_root)
-        .output()
-        .map_err(|e| format!("could not run `{bin}` (set MENAGE_*_BIN or add it to PATH): {e}"))?;
+    let mut last_err = None;
+    let mut output = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(600));
+        }
+        match Command::new(bin).args(args).current_dir(game_root).output() {
+            Ok(out) => {
+                output = Some(out);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => last_err = Some(e),
+            Err(e) => {
+                return Err(format!(
+                    "could not run `{bin}` (set MENAGE_*_BIN or add it to PATH): {e}"
+                ))
+            }
+        }
+    }
+    let Some(output) = output else {
+        let e = last_err.expect("NotFound recorded on every failed attempt");
+        return Err(format!(
+            "could not run `{bin}` after 3 tries (set MENAGE_*_BIN or add it to PATH; \
+             if the game repo is mid-build, wait for cargo to finish): {e}"
+        ));
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
