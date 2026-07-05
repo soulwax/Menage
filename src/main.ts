@@ -82,17 +82,20 @@ function cachedImage(path: string): HTMLImageElement | null {
 
 function selectedSheet() {
   if (selection?.type !== "sheet") return null;
-  return doc.instructions.sheets.find((s) => s.id === selection!.id) ?? null;
+  const current = selection;
+  return doc.instructions.sheets.find((s) => s.id === current.id) ?? null;
 }
 
 function selectedTileset() {
   if (selection?.type !== "tileset") return null;
-  return doc.instructions.tilesets.find((t) => t.id === selection!.id) ?? null;
+  const current = selection;
+  return doc.instructions.tilesets.find((t) => t.id === current.id) ?? null;
 }
 
 function selectedAtlas(): AtlasFile | null {
   if (selection?.type !== "atlasfile") return null;
-  return atlases.find((a) => a.path === selection!.path) ?? null;
+  const current = selection;
+  return atlases.find((a) => a.path === current.path) ?? null;
 }
 
 function selectedPlans(): AnimationPlan[] {
@@ -295,7 +298,7 @@ function renderAll(): void {
     onSelectAnimation: (name) => selectAnimation(name),
     onSelectSprite: (name) => selectSprite(name),
     onDeleteEntry: () => {
-      if (!selection) return;
+      if (selection?.type !== "sheet" && selection?.type !== "tileset") return;
       const current = selection;
       doc.apply((instructions) => {
         if (current.type === "sheet")
