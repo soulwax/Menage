@@ -476,6 +476,19 @@ fieldset.animation legend:hover {
   margin-top: 10px;
 }
 
+.atlas-facts {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+}
+
 /* ---- validation ribbon ---- */
 
 .validation-ribbon {

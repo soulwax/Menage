@@ -219,8 +219,18 @@ function renderLibrary(): void {
 function renderCenter(): void {
   const sheet = selectedSheet();
   const tileset = selectedTileset();
-  el("stage-wrap").classList.toggle("atlas-mode", activeTab === "atlas");
+  const atlas = selectedAtlas();
+  el("stage-wrap").classList.toggle("atlas-mode", activeTab === "atlas" && !atlas);
   stage.zoom = zoom;
+
+  // Descriptors have no "end product" (nothing gets cut) — the stage IS the view.
+  el<HTMLButtonElement>("tab-atlas").toggleAttribute("disabled", atlas !== null);
+  if (atlas) {
+    el<HTMLCanvasElement>("stage").classList.remove("hidden");
+    atlasCanvas.classList.add("hidden");
+    stage.setAtlas(cachedImage(atlas.image), atlas);
+    return;
+  }
 
   if (activeTab === "atlas") {
     el<HTMLCanvasElement>("stage").classList.add("hidden");
@@ -256,7 +266,10 @@ function currentFindings(): Finding[] {
 }
 
 function renderRibbon(): void {
-  const findings = currentFindings();
+  const atlas = selectedAtlas();
+  const findings = atlas
+    ? lintAtlas(atlas, imageSizes.get(atlas.image))
+    : currentFindings();
   const chip = el("ribbon-chip");
   const errors = findings.filter((f) => f.level === "error").length;
   const warns = findings.length - errors;
@@ -278,8 +291,9 @@ function renderToolbar(): void {
 
 function renderAll(): void {
   renderLibrary();
-  renderInspector(el("inspector"), doc, selection, selectedAnimation, {
+  renderInspector(el("inspector"), doc, selection, selectedAnimation, selectedAtlas(), selectedSprite, {
     onSelectAnimation: (name) => selectAnimation(name),
+    onSelectSprite: (name) => selectSprite(name),
     onDeleteEntry: () => {
       if (!selection) return;
       const current = selection;
@@ -316,13 +330,38 @@ async function loadDoc(): Promise<void> {
     return;
   }
   // Selection may be stale after a reload (or point at a renamed id).
-  if (selection && !selectedSheet() && !selectedTileset()) select(null);
+  if (
+    (selection?.type === "sheet" || selection?.type === "tileset") &&
+    !selectedSheet() &&
+    !selectedTileset()
+  )
+    select(null);
   say(`Loaded ${METADATA_REL} — ${doc.instructions.sheets.length} sheets, ${doc.instructions.tilesets.length} tilesets.`);
 }
 
 async function scanUnregistered(): Promise<void> {
-  const pngs = await bridge.listGamePngs(gameRoot, SCAN_ROOT);
+  const pngs = await bridge.listGameFiles(gameRoot, SCAN_ROOT, "png");
   unregistered = crossReference(doc.instructions, pngs, []).unregistered;
+  renderAll();
+}
+
+/** Discover atlas/grid descriptors: every TOML under Assets/Metadata that
+ *  parses as one. Non-descriptor TOMLs (spritesheets.toml itself, weather
+ *  files, …) simply don't match the schema and are skipped. */
+async function scanAtlases(): Promise<void> {
+  const paths = await bridge.listGameFiles(gameRoot, "Assets/Metadata", "toml");
+  const found = await Promise.all(
+    paths.map(async (path) => {
+      const text = await bridge.readGameText(gameRoot, path);
+      if (!text.ok) return null;
+      try {
+        return parseAtlasFile(path, text.output);
+      } catch {
+        return null;
+      }
+    }),
+  );
+  atlases = found.filter((a): a is AtlasFile => a !== null);
   renderAll();
 }
 
@@ -397,7 +436,7 @@ async function runCut(sheetId: string | null): Promise<void> {
 
 async function runAudit(): Promise<void> {
   say("Auditing: scanning PNGs and asking asset_pack what ships…");
-  const pngs = await bridge.listGamePngs(gameRoot, SCAN_ROOT);
+  const pngs = await bridge.listGameFiles(gameRoot, SCAN_ROOT, "png");
   const pack = await bridge.assetPackList(gameRoot);
   const packList = pack.ok ? parsePackList(pack.output) : [];
   const audit = crossReference(doc.instructions, pngs, packList);
@@ -441,12 +480,18 @@ function wire(): void {
   doc.onChange(renderAll);
 
   stage.onHover = (info) => {
-    statusCell.textContent = info
-      ? `cell ${info.column},${info.row} · px ${info.frameRect.x},${info.frameRect.y} ${info.frameRect.w}×${info.frameRect.h}` +
-        (info.animation ? ` · ${info.animation}` : "")
-      : "";
+    if (!info) {
+      statusCell.textContent = "";
+      return;
+    }
+    const rect = `px ${info.frameRect.x},${info.frameRect.y} ${info.frameRect.w}×${info.frameRect.h}`;
+    statusCell.textContent =
+      info.kind === "sprite"
+        ? `${info.name} · ${rect}${info.tags.length ? ` · [${info.tags.join(", ")}]` : ""}`
+        : `cell ${info.column},${info.row} · ${rect}` + (info.animation ? ` · ${info.animation}` : "");
   };
   stage.onPickAnimation = (name) => selectAnimation(name);
+  stage.onPickSprite = (name) => selectSprite(name);
 
   atlasCanvas.addEventListener("mousemove", (e) => {
     const sheet = selectedSheet();
@@ -480,7 +525,9 @@ function wire(): void {
     renderCenter();
   });
 
-  el("btn-reload").addEventListener("click", () => void loadDoc().then(scanUnregistered));
+  el("btn-reload").addEventListener("click", () =>
+    void loadDoc().then(scanUnregistered).then(scanAtlases),
+  );
   el("btn-undo").addEventListener("click", () => doc.undo());
   el("btn-redo").addEventListener("click", () => doc.redo());
   el("btn-save").addEventListener("click", () => void saveToGame());
@@ -502,6 +549,7 @@ function wire(): void {
       imageSizes.clear();
       await loadDoc();
       await scanUnregistered();
+      await scanAtlases();
     }
   });
 
@@ -535,6 +583,7 @@ async function start(): Promise<void> {
   }
   await loadDoc();
   await scanUnregistered();
+  await scanAtlases();
 }
 
 void start();

@@ -200,6 +200,109 @@ fn asset_pack_list(game_root: String) -> Result<String, String> {
     run_cli(&asset_pack_bin(), &game_root, &["--dry-run", "--list"])
 }
 
+// The command fns above are plain functions; these tests exercise them the
+// way the webview does — including the real `sprite_cutter` binary when the
+// game repo has one built (tests skip gracefully when it is absent, matching
+// the family's graceful-degradation rule).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// tools/menage/src-tauri → the EchoWarrior repo root.
+    fn game_root() -> String {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .expect("game root exists")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn cutter_exe(root: &str) -> Option<String> {
+        let path = Path::new(root).join("target/debug/sprite_cutter.exe");
+        let unix = Path::new(root).join("target/debug/sprite_cutter");
+        if path.exists() {
+            Some(path.to_string_lossy().into_owned())
+        } else if unix.exists() {
+            Some(unix.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    }
+
+    const VALID_METADATA: &str = r#"
+[[sheets]]
+id = "player_test"
+path = "Assets/Graphics/sprites/characters/player.png"
+kind = "character"
+frame_width = 48
+frame_height = 48
+columns = 6
+rows = 10
+output_dir = "Generated/Sprites/characters/player_test"
+
+[[sheets.animations]]
+name = "idle_down"
+row = 0
+start_column = 0
+frame_count = 6
+fps = 8
+flip_x = false
+"#;
+
+    #[test]
+    fn resolve_refuses_empty_root() {
+        assert!(resolve("", "Assets/x.toml").is_err());
+        assert!(resolve("   ", "Assets/x.toml").is_err());
+    }
+
+    #[test]
+    fn read_write_and_base64_roundtrip() {
+        let dir = std::env::temp_dir().join("menage-shell-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+
+        write_text_file(root.clone(), "roundtrip.txt".into(), "grüße 🗡".into()).unwrap();
+        let text = read_text_file(root.clone(), "roundtrip.txt".into()).unwrap();
+        assert_eq!(text, "grüße 🗡");
+
+        let b64 = read_file_base64(root.clone(), "roundtrip.txt".into()).unwrap();
+        assert!(!b64.is_empty() && !b64.contains(' '));
+        assert!(read_text_file(root, "missing.txt".into()).is_err());
+    }
+
+    #[test]
+    fn list_files_returns_sorted_json_of_matching_ext() {
+        let root = game_root();
+        let json = list_files(root, "Assets/Metadata".into(), "toml".into()).unwrap();
+        assert!(json.starts_with('[') && json.ends_with(']'));
+        assert!(json.contains("Assets/Metadata/portraits_6.toml"));
+        assert!(json.contains("Assets/Metadata/spritesheets.toml"));
+        assert!(!json.contains(".md")); // reference notes filtered out
+    }
+
+    #[test]
+    fn dry_run_validates_temp_metadata_without_touching_the_repo() {
+        let root = game_root();
+        let Some(cutter) = cutter_exe(&root) else {
+            eprintln!("skipping: build sprite_cutter in the game repo first");
+            return;
+        };
+        std::env::set_var("MENAGE_SPRITE_CUTTER_BIN", &cutter);
+
+        let report =
+            cutter_dry_run(root.clone(), None, Some(VALID_METADATA.into())).expect("valid metadata passes");
+        assert!(report.contains("would cut"), "unexpected report: {report}");
+
+        // The cutter's own validation is the authority: a grid that disagrees
+        // with the real image must be rejected.
+        let bad = VALID_METADATA.replace("columns = 6", "columns = 7");
+        let err = cutter_dry_run(root, None, Some(bad)).expect_err("bad metadata fails");
+        assert!(err.contains("expected"), "unexpected error: {err}");
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
