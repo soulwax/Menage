@@ -1,0 +1,21 @@
+# Node / web
+node_modules/
+dist/
+*.log
+.vite/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# VS Code: ignore per-user files but SHIP the shared build/debug commands.
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json

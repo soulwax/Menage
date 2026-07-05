@@ -1,0 +1,27 @@
+{
+  "name": "menage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Menage — the EchoWarrior asset manager (Tauri + web).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "typescript": "^5.6",
+    "vite": "^5.4",
+    "vitest": "^2"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "smol-toml": "^1.3"
+  }
+}

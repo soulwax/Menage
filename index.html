@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Menage — EchoWarrior Asset Manager</title>
+    <link rel="icon" type="image/png" href="./favicon.png" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <h1>Menage</h1>
+        <span class="tagline">EchoWarrior asset manager</span>
+      </div>
+      <div class="toolbar">
+        <span id="game-root" class="game-root" title="EchoWarrior repo this session manages">…</span>
+        <button id="btn-reload" class="small ghost" title="Reload spritesheets.toml from disk">↻ Reload</button>
+        <span class="toolbar-sep"></span>
+        <button id="btn-undo" class="small ghost" title="Undo (Ctrl+Z)" disabled>↶ Undo</button>
+        <button id="btn-redo" class="small ghost" title="Redo (Ctrl+Y)" disabled>↷ Redo</button>
+        <span class="toolbar-sep"></span>
+        <button id="btn-dry-run" class="small ghost" title="sprite_cutter --dry-run on the saved file">Dry-run</button>
+        <button id="btn-cut-sheet" class="small ghost" title="Cut the selected sheet for real" disabled>Cut sheet</button>
+        <button id="btn-cut-all" class="small ghost" title="Cut every sheet for real">Cut all</button>
+        <button id="btn-audit" class="small ghost" title="Cross-reference with asset_pack --dry-run --list">Audit</button>
+        <span class="spacer"></span>
+        <span id="doc-name" class="doc-name">spritesheets.toml</span>
+        <button id="btn-save" class="gold" title="Validate, then write spritesheets.toml">Save to game</button>
+      </div>
+    </header>
+
+    <main>
+      <!-- left: the library of registered sheets/tilesets + unregistered scan -->
+      <section class="panel library">
+        <div class="panel-head">
+          <h2>Library</h2>
+          <span id="lib-count" class="count"></span>
+        </div>
+        <div class="lib-scroll">
+          <div class="lib-group-head">
+            <h3>Sheets</h3>
+            <button id="btn-add-sheet" class="mini ghost" title="Register a new sprite sheet">+ new</button>
+          </div>
+          <ul id="sheet-list" class="lib-list"></ul>
+          <div class="lib-group-head">
+            <h3>Tilesets</h3>
+            <button id="btn-add-tileset" class="mini ghost" title="Register a new tileset">+ new</button>
+          </div>
+          <ul id="tileset-list" class="lib-list"></ul>
+          <div class="lib-group-head">
+            <h3>Unregistered</h3>
+            <button id="btn-rescan" class="mini ghost" title="Rescan Assets/Graphics/sprites for PNGs no instruction references">↻ scan</button>
+          </div>
+          <ul id="unregistered-list" class="lib-list unreg"></ul>
+        </div>
+      </section>
+
+      <!-- center: stage (source + grid) or atlas (the end product) -->
+      <section class="center">
+        <div class="view-tabs">
+          <button id="tab-stage" class="tab active">Stage</button>
+          <button id="tab-atlas" class="tab">Atlas — end product</button>
+          <span class="spacer"></span>
+          <div class="zoom" id="zoom-controls">
+            <button data-zoom="fit" class="mini active">fit</button>
+            <button data-zoom="1" class="mini">1×</button>
+            <button data-zoom="2" class="mini">2×</button>
+            <button data-zoom="4" class="mini">4×</button>
+            <button data-zoom="8" class="mini">8×</button>
+          </div>
+        </div>
+        <div class="stage-wrap" id="stage-wrap">
+          <canvas id="stage" class="stage"></canvas>
+          <canvas id="atlas" class="stage hidden"></canvas>
+        </div>
+        <div class="status-bar"><span id="status-cell">Select a sheet from the library.</span></div>
+        <div class="report-panel">
+          <div class="report-head">
+            <h3>Report</h3>
+            <span class="sub">sprite_cutter / asset_pack output, verbatim</span>
+          </div>
+          <pre id="report" class="output">No runs yet. Dry-run validates the instructions against the real images.</pre>
+        </div>
+      </section>
+
+      <!-- right: inspector (the instructions) + playback loupe + findings ribbon -->
+      <aside class="inspector-col">
+        <div class="loupe-wrap">
+          <canvas id="loupe" width="96" height="96"></canvas>
+          <div class="loupe-side">
+            <button id="btn-play" class="small ghost" title="Play / pause the selected animation">▶</button>
+            <span id="loupe-label" class="loupe-label">no animation</span>
+          </div>
+        </div>
+        <div class="detail-body" id="inspector">
+          <p class="empty">Select a sheet or tileset to edit its cutting instructions.</p>
+        </div>
+        <div class="validation-ribbon">
+          <span id="ribbon-chip" class="chip ok">clean</span>
+          <pre id="findings" class="output">Findings appear here as you edit.</pre>
+        </div>
+      </aside>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,38 @@
+# Menage — Tauri shell (own crate, NOT part of the EchoWarrior workspace).
+#
+# Kept deliberately thin: it shells out to the game's `sprite_cutter` and
+# `asset_pack` CLIs and does plain file I/O. It does not depend on the game
+# crate, so the app and game evolve independently.
+
+# Stand alone: never get absorbed into a parent Cargo workspace (the game repo).
+[workspace]
+
+[package]
+name = "menage"
+version = "0.1.0"
+description = "EchoWarrior asset manager (Tauri shell)"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+base64 = "0.22"
+
+[features]
+# Enabled by tauri to strip the console window on Windows release builds.
+custom-protocol = ["tauri/custom-protocol"]
+
+# Mirrors [profile.speed_trace] in the game's Cargo.toml — keep the two in step
+# so dist builds (`tauri build -- --profile speed_trace`) match the family.
+[profile.speed_trace]
+inherits = "release"
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = "full"
+split-debuginfo = "packed"
+strip = "none"
