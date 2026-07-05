@@ -6,6 +6,7 @@
 import { MenageDoc } from "./doc";
 import { lint, isSaveable, type Finding, type ImageSizes } from "./instructions";
 import { planSheet, type AnimationPlan } from "./atlas";
+import { atlasStem, lintAtlas, parseAtlasFile, type AtlasFile } from "./atlasfile";
 import { Stage, sheetGrid, drawContactSheet, contactSheetHit, type Zoom } from "./stage";
 import { Loupe } from "./loupe";
 import { renderInspector, type Selection } from "./form";
@@ -25,9 +26,11 @@ const doc = new MenageDoc();
 let gameRoot = "";
 let selection: Selection = null;
 let selectedAnimation: string | null = null;
+let selectedSprite: string | null = null;
 let activeTab: "stage" | "atlas" = "stage";
 let zoom: Zoom = "fit";
 let unregistered: string[] = [];
+let atlases: AtlasFile[] = [];
 
 const images = new Map<string, HTMLImageElement | "missing">();
 const imageSizes: ImageSizes = new Map();
@@ -87,6 +90,11 @@ function selectedTileset() {
   return doc.instructions.tilesets.find((t) => t.id === selection!.id) ?? null;
 }
 
+function selectedAtlas(): AtlasFile | null {
+  if (selection?.type !== "atlasfile") return null;
+  return atlases.find((a) => a.path === selection!.path) ?? null;
+}
+
 function selectedPlans(): AnimationPlan[] {
   const sheet = selectedSheet();
   return sheet ? planSheet(sheet) : [];
@@ -101,10 +109,43 @@ function selectAnimation(name: string | null): void {
   renderAll();
 }
 
+/** Selecting an atlas sprite highlights its rect and shows a still crop in
+ *  the loupe (a one-frame "animation" — same plumbing, no special case). */
+function selectSprite(name: string | null): void {
+  selectedSprite = name;
+  stage.selectedSprite = name;
+  const atlas = selectedAtlas();
+  const sprite = atlas?.sprites.find((s) => s.name === name) ?? null;
+  loupe.setAnimation(
+    atlas && sprite ? cachedImage(atlas.image) : null,
+    atlas && sprite
+      ? {
+          name: sprite.name,
+          fps: 1,
+          dir: atlas.path,
+          frames: [
+            {
+              sx: sprite.rect.x,
+              sy: sprite.rect.y,
+              w: sprite.rect.w,
+              h: sprite.rect.h,
+              flipX: false,
+              filename: sprite.name,
+            },
+          ],
+          manifestToml: "",
+        }
+      : null,
+  );
+  renderAll();
+}
+
 function select(next: Selection): void {
   selection = next;
   selectedAnimation = null;
+  selectedSprite = null;
   stage.selectedAnimation = null;
+  stage.selectedSprite = null;
   loupe.setAnimation(null, null);
   renderAll();
 }
@@ -142,6 +183,21 @@ function renderLibrary(): void {
     li.addEventListener("click", () => select({ type: "tileset", id: tileset.id }));
     tilesetList.append(li);
   }
+  const atlasList = el("atlas-list");
+  atlasList.textContent = "";
+  for (const atlas of atlases) {
+    const li = document.createElement("li");
+    li.textContent = atlasStem(atlas.path);
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = `${atlas.kind} · ${atlas.sprites.length}`;
+    li.append(meta);
+    if (selection?.type === "atlasfile" && selection.path === atlas.path) li.classList.add("selected");
+    li.addEventListener("click", () => select({ type: "atlasfile", path: atlas.path }));
+    atlasList.append(li);
+  }
+  el("atlas-count").textContent = String(atlases.length);
+
   for (const path of unregistered) {
     const li = document.createElement("li");
     const name = document.createElement("span");

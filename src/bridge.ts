@@ -100,12 +100,18 @@ export async function gameImageUrl(gameRoot: string, rel: string): Promise<strin
   }
 }
 
-/** Repo-relative paths of every PNG under `relDir`, recursively. */
-export async function listGamePngs(gameRoot: string, relDir: string): Promise<string[]> {
+/** Repo-relative paths of every `.ext` file under `relDir`, recursively. */
+export async function listGameFiles(
+  gameRoot: string,
+  relDir: string,
+  ext: string,
+): Promise<string[]> {
   const invoke = await getInvoke();
   if (!invoke) {
     try {
-      const res = await fetch(`/@game-ls?dir=${encodeURIComponent(relDir)}&ext=png`);
+      const res = await fetch(
+        `/@game-ls?dir=${encodeURIComponent(relDir)}&ext=${encodeURIComponent(ext)}`,
+      );
       if (!res.ok) return [];
       const parsed: unknown = await res.json();
       return Array.isArray(parsed) ? (parsed as string[]) : [];
@@ -113,7 +119,7 @@ export async function listGamePngs(gameRoot: string, relDir: string): Promise<st
       return [];
     }
   }
-  const r = await call("list_pngs", { gameRoot, relDir });
+  const r = await call("list_files", { gameRoot, relDir, ext });
   if (!r.ok) return [];
   try {
     const parsed: unknown = JSON.parse(r.output);

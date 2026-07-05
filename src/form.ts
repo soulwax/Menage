@@ -4,14 +4,17 @@
 
 import type { MenageDoc } from "./doc";
 import type { AnimationDef, SheetDef, TilesetDef } from "./instructions";
+import type { AtlasFile } from "./atlasfile";
 
 export type Selection =
   | { type: "sheet"; id: string }
   | { type: "tileset"; id: string }
+  | { type: "atlasfile"; path: string }
   | null;
 
 export interface InspectorHooks {
   onSelectAnimation: (name: string | null) => void;
+  onSelectSprite: (name: string | null) => void;
   onDeleteEntry: () => void;
 }
 
@@ -84,6 +87,8 @@ export function renderInspector(
   doc: MenageDoc,
   selection: Selection,
   selectedAnimation: string | null,
+  atlas: AtlasFile | null,
+  selectedSprite: string | null,
   hooks: InspectorHooks,
 ): void {
   host.textContent = "";
@@ -92,6 +97,11 @@ export function renderInspector(
     p.className = "empty";
     p.textContent = "Select a sheet or tileset to edit its cutting instructions.";
     host.append(p);
+    return;
+  }
+
+  if (selection.type === "atlasfile") {
+    if (atlas) host.append(atlasPanel(atlas, selectedSprite, hooks));
     return;
   }
 
@@ -105,6 +115,58 @@ export function renderInspector(
   const sheet = findSheet(doc, selection.id);
   if (!sheet) return;
   host.append(sheetForm(doc, sheet, selectedAnimation, hooks));
+}
+
+/** Read-only descriptor panel: the header facts plus the named sprites as a
+ *  clickable roster (placeholder-named cells stay discoverable via hover on
+ *  the stage instead of flooding the list). */
+function atlasPanel(
+  atlas: AtlasFile,
+  selectedSprite: string | null,
+  hooks: InspectorHooks,
+): DocumentFragment {
+  const frag = document.createDocumentFragment();
+  const head = document.createElement("h3");
+  head.textContent = `Atlas — ${atlas.path.split("/").pop()}`;
+  frag.append(head);
+
+  const facts = document.createElement("pre");
+  facts.className = "atlas-facts";
+  facts.textContent = [
+    `image    ${atlas.image}`,
+    `type     ${atlas.kind}`,
+    `tile     ${atlas.tileWidth}×${atlas.tileHeight}`,
+    `grid     ${atlas.columns}×${atlas.rows}` +
+      (atlas.paddingX || atlas.paddingY ? `  gutter ${atlas.paddingX},${atlas.paddingY}` : ""),
+    `sprites  ${atlas.sprites.length}`,
+    "",
+    "read-only — descriptors have no CLI validator to gate a save with yet",
+  ].join("\n");
+  frag.append(facts);
+
+  const named = atlas.sprites.filter((s) => !/^(portrait|sprite|tile)_r?\d/i.test(s.name));
+  const listHead = document.createElement("div");
+  listHead.className = "lib-group-head";
+  const h = document.createElement("h3");
+  h.textContent = `Named sprites (${named.length})`;
+  listHead.append(h);
+  frag.append(listHead);
+
+  const list = document.createElement("ul");
+  list.className = "lib-list";
+  for (const sprite of named) {
+    const li = document.createElement("li");
+    li.textContent = sprite.name;
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = `${sprite.rect.x},${sprite.rect.y}`;
+    li.append(meta);
+    if (sprite.name === selectedSprite) li.classList.add("selected");
+    li.addEventListener("click", () => hooks.onSelectSprite(sprite.name));
+    list.append(li);
+  }
+  frag.append(list);
+  return frag;
 }
 
 function sheetForm(

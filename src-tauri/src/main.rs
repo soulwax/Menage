@@ -100,22 +100,23 @@ fn read_file_base64(game_root: String, rel: String) -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
-/// JSON array of repo-relative PNG paths under `rel_dir`, recursive, sorted.
-/// Hand-rolled JSON to keep the shell serde-free (the family convention).
+/// JSON array of repo-relative paths with extension `ext` under `rel_dir`,
+/// recursive, sorted. Hand-rolled JSON to keep the shell serde-free (the
+/// family convention).
 #[tauri::command]
-fn list_pngs(game_root: String, rel_dir: String) -> Result<String, String> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+fn list_files(game_root: String, rel_dir: String, ext: String) -> Result<String, String> {
+    fn walk(dir: &Path, ext: &str, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                walk(&path, out);
+                walk(&path, ext, out);
             } else if path
                 .extension()
                 .and_then(|x| x.to_str())
-                .is_some_and(|x| x.eq_ignore_ascii_case("png"))
+                .is_some_and(|x| x.eq_ignore_ascii_case(ext))
             {
                 out.push(path);
             }
@@ -124,7 +125,11 @@ fn list_pngs(game_root: String, rel_dir: String) -> Result<String, String> {
 
     let root = Path::new(&game_root);
     let mut found = Vec::new();
-    walk(&resolve(&game_root, &rel_dir)?, &mut found);
+    walk(
+        &resolve(&game_root, &rel_dir)?,
+        ext.trim_start_matches('.'),
+        &mut found,
+    );
     let mut rels: Vec<String> = found
         .iter()
         .filter_map(|p| p.strip_prefix(root).ok())
@@ -203,7 +208,7 @@ fn main() {
             read_text_file,
             write_text_file,
             read_file_base64,
-            list_pngs,
+            list_files,
             cutter_dry_run,
             cutter_cut,
             asset_pack_list,

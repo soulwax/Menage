@@ -4,6 +4,7 @@
 
 import type { SheetDef } from "./instructions";
 import { ATLAS_LABEL_H, layoutContactSheet, type AnimationPlan } from "./atlas";
+import { spriteAt, type AtlasFile } from "./atlasfile";
 
 export type Zoom = "fit" | number;
 
@@ -16,12 +17,20 @@ export interface GridModel {
   animations: Array<{ name: string; row: number; start_column: number; frame_count: number }>;
 }
 
-export interface HoverInfo {
-  column: number;
-  row: number;
-  frameRect: { x: number; y: number; w: number; h: number };
-  animation: string | null;
-}
+export type HoverInfo =
+  | {
+      kind: "cell";
+      column: number;
+      row: number;
+      frameRect: { x: number; y: number; w: number; h: number };
+      animation: string | null;
+    }
+  | {
+      kind: "sprite";
+      name: string;
+      tags: string[];
+      frameRect: { x: number; y: number; w: number; h: number };
+    };
 
 export function sheetGrid(sheet: SheetDef): GridModel {
   return {
@@ -54,11 +63,14 @@ function coverage(grid: GridModel): Map<string, number> {
 export class Stage {
   private image: HTMLImageElement | null = null;
   private grid: GridModel | null = null;
+  private atlas: AtlasFile | null = null;
   private scale = 1;
   zoom: Zoom = "fit";
   selectedAnimation: string | null = null;
+  selectedSprite: string | null = null;
   onHover: (info: HoverInfo | null) => void = () => {};
   onPickAnimation: (name: string | null) => void = () => {};
+  onPickSprite: (name: string | null) => void = () => {};
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -68,13 +80,24 @@ export class Stage {
     canvas.addEventListener("mouseleave", () => this.onHover(null));
     canvas.addEventListener("click", (e) => {
       const hit = this.hitTest(e);
-      this.onPickAnimation(hit?.animation ?? null);
+      if (this.atlas) this.onPickSprite(hit?.kind === "sprite" ? hit.name : null);
+      else this.onPickAnimation(hit?.kind === "cell" ? hit.animation : null);
     });
   }
 
   setSheet(image: HTMLImageElement | null, grid: GridModel | null): void {
     this.image = image;
     this.grid = grid;
+    this.atlas = null;
+    this.draw();
+  }
+
+  /** Show an atlas/grid descriptor: the image with every sprite's rect
+   *  outlined, labels where they fit, and sprite-level hit-testing. */
+  setAtlas(image: HTMLImageElement | null, atlas: AtlasFile): void {
+    this.image = image;
+    this.grid = null;
+    this.atlas = atlas;
     this.draw();
   }
 
@@ -87,6 +110,15 @@ export class Stage {
     if (this.image) return { w: this.image.naturalWidth, h: this.image.naturalHeight };
     if (this.grid)
       return { w: this.grid.columns * this.grid.frameW, h: this.grid.rows * this.grid.frameH };
+    if (this.atlas) {
+      let w = this.atlas.originX + this.atlas.columns * (this.atlas.tileWidth + this.atlas.paddingX);
+      let h = this.atlas.originY + this.atlas.rows * (this.atlas.tileHeight + this.atlas.paddingY);
+      for (const sprite of this.atlas.sprites) {
+        w = Math.max(w, sprite.rect.x + sprite.rect.w);
+        h = Math.max(h, sprite.rect.y + sprite.rect.h);
+      }
+      return { w, h };
+    }
     return { w: 320, h: 180 };
   }
 
@@ -100,15 +132,23 @@ export class Stage {
   }
 
   private hitTest(e: MouseEvent): HoverInfo | null {
-    if (!this.grid) return null;
     const rect = this.canvas.getBoundingClientRect();
     const x = (e.clientX - rect.left) / this.scale;
     const y = (e.clientY - rect.top) / this.scale;
+
+    if (this.atlas) {
+      const sprite = spriteAt(this.atlas, x, y);
+      if (!sprite) return null;
+      return { kind: "sprite", name: sprite.name, tags: sprite.tags, frameRect: { ...sprite.rect } };
+    }
+
+    if (!this.grid) return null;
     const column = Math.floor(x / this.grid.frameW);
     const row = Math.floor(y / this.grid.frameH);
     if (column < 0 || row < 0 || column >= this.grid.columns || row >= this.grid.rows) return null;
     const animationIndex = coverage(this.grid).get(`${column},${row}`);
     return {
+      kind: "cell",
       column,
       row,
       frameRect: {
@@ -135,6 +175,11 @@ export class Stage {
       ctx.drawImage(this.image, 0, 0, this.canvas.width, this.canvas.height);
     } else {
       drawMissingPlaceholder(ctx, this.canvas.width, this.canvas.height);
+    }
+
+    if (this.atlas) {
+      this.drawAtlasOverlay(ctx);
+      return;
     }
 
     if (!this.grid) return;
@@ -186,6 +231,42 @@ export class Stage {
       ctx.fillStyle = `hsl(${hue}, 75%, 72%)`;
       ctx.fillText(animation.name, x, y);
     });
+  }
+
+  /** Sprite rects over the image: gold for the selected sprite, warm for
+   *  sprites with real names, faint for auto-generated placeholders. Labels
+   *  draw only where the cell is wide enough to carry them. */
+  private drawAtlasOverlay(ctx: CanvasRenderingContext2D): void {
+    if (!this.atlas) return;
+    ctx.font = "600 11px system-ui, sans-serif";
+    ctx.textBaseline = "top";
+    for (const sprite of this.atlas.sprites) {
+      const x = Math.round(sprite.rect.x * this.scale);
+      const y = Math.round(sprite.rect.y * this.scale);
+      const w = Math.round(sprite.rect.w * this.scale);
+      const h = Math.round(sprite.rect.h * this.scale);
+      const selected = this.selectedSprite !== null && sprite.name === this.selectedSprite;
+      const placeholder = /^(portrait|sprite|tile)_r?\d/i.test(sprite.name);
+      ctx.strokeStyle = selected
+        ? "rgba(232, 201, 138, 0.95)"
+        : placeholder
+          ? "rgba(138, 131, 151, 0.28)"
+          : "rgba(216, 178, 104, 0.55)";
+      ctx.lineWidth = selected ? 2 : 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+      if (selected) ctx.fillStyle = "rgba(216, 178, 104, 0.12)";
+      if (selected) ctx.fillRect(x, y, w, h);
+
+      if (!placeholder && sprite.name !== "" && w >= 80) {
+        const width = ctx.measureText(sprite.name).width;
+        if (width + 8 <= w) {
+          ctx.fillStyle = "rgba(10, 8, 14, 0.75)";
+          ctx.fillRect(x + 2, y + 2, width + 6, 15);
+          ctx.fillStyle = selected ? "#e8c98a" : "#d8b268";
+          ctx.fillText(sprite.name, x + 5, y + 4);
+        }
+      }
+    }
   }
 }
 
