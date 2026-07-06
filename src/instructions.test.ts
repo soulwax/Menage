@@ -106,33 +106,31 @@ describe("lint", () => {
     expect(findings.some((f) => f.level === "error" && f.message.includes("unique"))).toBe(true);
   });
 
-  it("flags frames that run past the grid, honoring row wrap", () => {
+  it("rejects row wrap exactly like the game validator (sheets CLI agrees)", () => {
     const instructions = parseInstructions(SAMPLE);
-    // 6 columns; start at column 4 on the last row with 3 frames → wraps past.
+    // 6 columns: starting at 4 with 3 frames would wrap onto the next row —
+    // the game's SpritesheetMetadata::validate() forbids that.
     instructions.sheets[0].animations[0] = {
-      name: "overflow",
-      row: 9,
+      name: "wrap",
+      row: 0,
       start_column: 4,
       frame_count: 3,
       fps: 8,
       flip_x: false,
     };
     const findings = lint(instructions);
-    expect(findings.some((f) => f.message.includes("run past the grid"))).toBe(true);
+    const wrap = findings.find((f) => f.message.includes("forbids row wrap"));
+    expect(wrap?.level).toBe("error");
+    expect(wrap?.target).toEqual({ type: "sheet", id: "player", animation: "wrap" });
   });
 
-  it("wrap within the sheet is legal (the cutter walks onto later rows)", () => {
+  it("flags a row outside the sheet, with a clickable target", () => {
     const instructions = parseInstructions(SAMPLE);
-    instructions.sheets[0].animations[0] = {
-      name: "wrap",
-      row: 0,
-      start_column: 4,
-      frame_count: 4, // frames land on rows 0 and 1 of 10 — fine
-      fps: 8,
-      flip_x: false,
-    };
+    instructions.sheets[0].animations[0].row = 12;
     const findings = lint(instructions);
-    expect(findings.filter((f) => f.level === "error")).toEqual([]);
+    const outside = findings.find((f) => f.message.includes("outside the sheet"));
+    expect(outside?.level).toBe("error");
+    expect(outside?.target?.animation).toBe("idle_down");
   });
 
   it("enforces the cutter's exact-dimension rule when sizes are known", () => {

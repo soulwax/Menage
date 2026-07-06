@@ -66,8 +66,14 @@ export class Loupe {
     const ctx = this.canvas.getContext("2d");
     if (!ctx) return;
     ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = "#0e0b13";
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    // Checker backdrop so transparent pixels read as transparency.
+    const tile = 8;
+    for (let y = 0; y < this.canvas.height; y += tile) {
+      for (let x = 0; x < this.canvas.width; x += tile) {
+        ctx.fillStyle = (x / tile + y / tile) % 2 === 0 ? "#1b1724" : "#151119";
+        ctx.fillRect(x, y, tile, tile);
+      }
+    }
     if (!this.image || !this.plan || this.plan.frames.length === 0) return;
     const frame = this.plan.frames[Math.min(this.frame, this.plan.frames.length - 1)];
     const scale = Math.max(
@@ -87,5 +93,16 @@ export class Loupe {
       ctx.drawImage(this.image, frame.sx, frame.sy, frame.w, frame.h, dx, dy, dw, dh);
     }
     ctx.restore();
+
+    if (this.plan.frames.length > 1) {
+      const text = `${this.frame + 1}/${this.plan.frames.length}`;
+      ctx.font = "600 10px system-ui, sans-serif";
+      ctx.textBaseline = "bottom";
+      const width = ctx.measureText(text).width;
+      ctx.fillStyle = "rgba(10, 8, 14, 0.75)";
+      ctx.fillRect(this.canvas.width - width - 8, this.canvas.height - 15, width + 8, 15);
+      ctx.fillStyle = "#d8b268";
+      ctx.fillText(text, this.canvas.width - width - 4, this.canvas.height - 3);
+    }
   }
 }

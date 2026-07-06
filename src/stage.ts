@@ -65,24 +65,63 @@ export class Stage {
   private grid: GridModel | null = null;
   private atlas: AtlasFile | null = null;
   private scale = 1;
+  private hoverKey: string | null = null;
+  private hoverRect: { x: number; y: number; w: number; h: number } | null = null;
   zoom: Zoom = "fit";
   selectedAnimation: string | null = null;
   selectedSprite: string | null = null;
   onHover: (info: HoverInfo | null) => void = () => {};
   onPickAnimation: (name: string | null) => void = () => {};
   onPickSprite: (name: string | null) => void = () => {};
+  /** Ctrl+wheel on the canvas; main owns the zoom state and scroll anchor. */
+  onWheelZoom: (direction: 1 | -1, event: WheelEvent) => void = () => {};
 
   constructor(
     private canvas: HTMLCanvasElement,
     private wrap: HTMLElement,
   ) {
-    canvas.addEventListener("mousemove", (e) => this.onHover(this.hitTest(e)));
-    canvas.addEventListener("mouseleave", () => this.onHover(null));
+    canvas.addEventListener("mousemove", (e) => {
+      const hit = this.hitTest(e);
+      this.setHover(hit);
+      this.onHover(hit);
+    });
+    canvas.addEventListener("mouseleave", () => {
+      this.setHover(null);
+      this.onHover(null);
+    });
     canvas.addEventListener("click", (e) => {
       const hit = this.hitTest(e);
       if (this.atlas) this.onPickSprite(hit?.kind === "sprite" ? hit.name : null);
       else this.onPickAnimation(hit?.kind === "cell" ? hit.animation : null);
     });
+    wrap.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        this.onWheelZoom(e.deltaY < 0 ? 1 : -1, e);
+      },
+      { passive: false },
+    );
+  }
+
+  /** The effective pixel scale currently drawn (resolves "fit"). */
+  get currentScale(): number {
+    return this.scale;
+  }
+
+  /** Redraw only when the hovered cell/sprite actually changes — keeps the
+   *  hover outline cheap even on the 565-cell symbols atlas. */
+  private setHover(hit: HoverInfo | null): void {
+    const key = hit
+      ? hit.kind === "sprite"
+        ? `s:${hit.name}`
+        : `c:${hit.column},${hit.row}`
+      : null;
+    if (key === this.hoverKey) return;
+    this.hoverKey = key;
+    this.hoverRect = hit ? { ...hit.frameRect } : null;
+    this.draw();
   }
 
   setSheet(image: HTMLImageElement | null, grid: GridModel | null): void {
@@ -172,6 +211,8 @@ export class Stage {
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
     if (this.image) {
+      // Checkerboard under the art so transparency reads as transparency.
+      drawChecker(ctx, 0, 0, this.canvas.width, this.canvas.height);
       ctx.drawImage(this.image, 0, 0, this.canvas.width, this.canvas.height);
     } else {
       drawMissingPlaceholder(ctx, this.canvas.width, this.canvas.height);
@@ -179,6 +220,7 @@ export class Stage {
 
     if (this.atlas) {
       this.drawAtlasOverlay(ctx);
+      this.drawHoverOutline(ctx);
       return;
     }
 
@@ -231,6 +273,19 @@ export class Stage {
       ctx.fillStyle = `hsl(${hue}, 75%, 72%)`;
       ctx.fillText(animation.name, x, y);
     });
+
+    this.drawHoverOutline(ctx);
+  }
+
+  private drawHoverOutline(ctx: CanvasRenderingContext2D): void {
+    if (!this.hoverRect) return;
+    const x = Math.round(this.hoverRect.x * this.scale);
+    const y = Math.round(this.hoverRect.y * this.scale);
+    const w = Math.round(this.hoverRect.w * this.scale);
+    const h = Math.round(this.hoverRect.h * this.scale);
+    ctx.strokeStyle = "rgba(239, 231, 215, 0.9)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
   }
 
   /** Sprite rects over the image: gold for the selected sprite, warm for
@@ -266,6 +321,25 @@ export class Stage {
           ctx.fillText(sprite.name, x + 5, y + 4);
         }
       }
+    }
+  }
+}
+
+/** Subtle two-tone checker (12px screen-space tiles) — the standard "this is
+ *  transparent" background for pixel art. */
+function drawChecker(
+  ctx: CanvasRenderingContext2D,
+  x0: number,
+  y0: number,
+  w: number,
+  h: number,
+): void {
+  const tile = 12;
+  for (let y = 0; y < h; y += tile) {
+    for (let x = 0; x < w; x += tile) {
+      const even = (Math.floor(x / tile) + Math.floor(y / tile)) % 2 === 0;
+      ctx.fillStyle = even ? "#1b1724" : "#151119";
+      ctx.fillRect(x0 + x, y0 + y, Math.min(tile, w - x), Math.min(tile, h - y));
     }
   }
 }
@@ -318,8 +392,7 @@ export function drawContactSheet(
     const dy = Math.round(cell.dy * scale);
     const dw = Math.round(cell.frame.w * scale);
     const dh = Math.round(cell.frame.h * scale);
-    ctx.fillStyle = "#0e0b13";
-    ctx.fillRect(dx, dy, dw, dh);
+    drawChecker(ctx, dx, dy, dw, dh);
     if (image) {
       ctx.save();
       if (cell.frame.flipX) {

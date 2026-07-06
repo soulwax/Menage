@@ -103,8 +103,13 @@
           <p class="empty">Select a sheet or tileset to edit its cutting instructions.</p>
         </div>
         <div class="validation-ribbon">
-          <span id="ribbon-chip" class="chip ok">clean</span>
-          <pre id="findings" class="output">Findings appear here as you edit.</pre>
+          <div class="ribbon-head">
+            <span id="ribbon-chip" class="chip ok">clean</span>
+            <span id="ribbon-source" class="ribbon-source" title="Where the findings come from">live lint</span>
+            <span class="spacer"></span>
+            <button id="btn-check" class="mini ghost" title="Run the game's own validator (sheets validate --json --images)">✓ Check</button>
+          </div>
+          <div id="findings" class="findings"><p class="empty">Findings appear here as you edit — click one to jump to it.</p></div>
         </div>
       </aside>
     </main>

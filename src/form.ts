@@ -16,6 +16,9 @@ export interface InspectorHooks {
   onSelectAnimation: (name: string | null) => void;
   onSelectSprite: (name: string | null) => void;
   onDeleteEntry: () => void;
+  /** Rename the selected entry: updates the selection BEFORE the doc mutation
+   *  so the single re-render lands on the renamed entry (no lost selection). */
+  onRename: (newId: string) => void;
 }
 
 const SHEET_KINDS = ["character", "tile_animation", "object_animation", "particle"];
@@ -34,18 +37,20 @@ function field(
   return row;
 }
 
-function textInput(value: string, commit: (v: string) => void): HTMLInputElement {
+function textInput(value: string, focusKey: string, commit: (v: string) => void): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "text";
   input.value = value;
+  input.dataset.focusKey = focusKey;
   input.addEventListener("change", () => commit(input.value.trim()));
   return input;
 }
 
-function numberInput(value: number, commit: (v: number) => void): HTMLInputElement {
+function numberInput(value: number, focusKey: string, commit: (v: number) => void): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "number";
   input.value = String(value);
+  input.dataset.focusKey = focusKey;
   input.addEventListener("change", () => {
     const parsed = Number(input.value);
     commit(Number.isFinite(parsed) ? parsed : value);
@@ -53,16 +58,18 @@ function numberInput(value: number, commit: (v: number) => void): HTMLInputEleme
   return input;
 }
 
-function checkbox(value: boolean, commit: (v: boolean) => void): HTMLInputElement {
+function checkbox(value: boolean, focusKey: string, commit: (v: boolean) => void): HTMLInputElement {
   const input = document.createElement("input");
   input.type = "checkbox";
   input.checked = value;
+  input.dataset.focusKey = focusKey;
   input.addEventListener("change", () => commit(input.checked));
   return input;
 }
 
-function kindSelect(value: string, commit: (v: string) => void): HTMLSelectElement {
+function kindSelect(value: string, focusKey: string, commit: (v: string) => void): HTMLSelectElement {
   const select = document.createElement("select");
+  select.dataset.focusKey = focusKey;
   const kinds = SHEET_KINDS.includes(value) ? SHEET_KINDS : [value, ...SHEET_KINDS];
   for (const kind of kinds) {
     const option = document.createElement("option");
@@ -188,14 +195,14 @@ function sheetForm(
   frag.append(head);
 
   frag.append(
-    field("id", textInput(sheet.id, (v) => edit((s) => (s.id = v)))),
-    field("path", textInput(sheet.path, (v) => edit((s) => (s.path = v))), "PNG path, relative to the game repo root"),
-    field("kind", kindSelect(sheet.kind, (v) => edit((s) => (s.kind = v)))),
-    field("frame w", numberInput(sheet.frame_width, (v) => edit((s) => (s.frame_width = v)))),
-    field("frame h", numberInput(sheet.frame_height, (v) => edit((s) => (s.frame_height = v)))),
-    field("columns", numberInput(sheet.columns, (v) => edit((s) => (s.columns = v)))),
-    field("rows", numberInput(sheet.rows, (v) => edit((s) => (s.rows = v)))),
-    field("output", textInput(sheet.output_dir, (v) => edit((s) => (s.output_dir = v))), "Cut frames land here (Generated/Sprites/…)"),
+    field("id", textInput(sheet.id, "sheet.id", (v) => hooks.onRename(v))),
+    field("path", textInput(sheet.path, "sheet.path", (v) => edit((s) => (s.path = v))), "PNG path, relative to the game repo root"),
+    field("kind", kindSelect(sheet.kind, "sheet.kind", (v) => edit((s) => (s.kind = v)))),
+    field("frame w", numberInput(sheet.frame_width, "sheet.frame_width", (v) => edit((s) => (s.frame_width = v)))),
+    field("frame h", numberInput(sheet.frame_height, "sheet.frame_height", (v) => edit((s) => (s.frame_height = v)))),
+    field("columns", numberInput(sheet.columns, "sheet.columns", (v) => edit((s) => (s.columns = v)))),
+    field("rows", numberInput(sheet.rows, "sheet.rows", (v) => edit((s) => (s.rows = v)))),
+    field("output", textInput(sheet.output_dir, "sheet.output_dir", (v) => edit((s) => (s.output_dir = v))), "Cut frames land here (Generated/Sprites/…)"),
   );
 
   const animationsHead = document.createElement("div");
@@ -241,13 +248,14 @@ function animationForm(
   legend.addEventListener("click", () => hooks.onSelectAnimation(animation.name));
   set.append(legend);
 
+  const key = (name: string) => `anim.${index}.${name}`;
   set.append(
-    field("name", textInput(animation.name, (v) => edit((s) => (s.animations[index].name = v)))),
-    field("row", numberInput(animation.row, (v) => edit((s) => (s.animations[index].row = v)))),
-    field("start col", numberInput(animation.start_column, (v) => edit((s) => (s.animations[index].start_column = v)))),
-    field("frames", numberInput(animation.frame_count, (v) => edit((s) => (s.animations[index].frame_count = v)))),
-    field("fps", numberInput(animation.fps, (v) => edit((s) => (s.animations[index].fps = v)))),
-    field("flip x", checkbox(animation.flip_x, (v) => edit((s) => (s.animations[index].flip_x = v)))),
+    field("name", textInput(animation.name, key("name"), (v) => edit((s) => (s.animations[index].name = v)))),
+    field("row", numberInput(animation.row, key("row"), (v) => edit((s) => (s.animations[index].row = v)))),
+    field("start col", numberInput(animation.start_column, key("start_column"), (v) => edit((s) => (s.animations[index].start_column = v)))),
+    field("frames", numberInput(animation.frame_count, key("frame_count"), (v) => edit((s) => (s.animations[index].frame_count = v)))),
+    field("fps", numberInput(animation.fps, key("fps"), (v) => edit((s) => (s.animations[index].fps = v)))),
+    field("flip x", checkbox(animation.flip_x, key("flip_x"), (v) => edit((s) => (s.animations[index].flip_x = v)))),
   );
 
   const remove = document.createElement("button");
@@ -274,12 +282,12 @@ function tilesetForm(doc: MenageDoc, tileset: TilesetDef, hooks: InspectorHooks)
   head.textContent = `Tileset — ${tileset.id}`;
   frag.append(head);
   frag.append(
-    field("id", textInput(tileset.id, (v) => edit((t) => (t.id = v)))),
-    field("path", textInput(tileset.path, (v) => edit((t) => (t.path = v)))),
-    field("tile w", numberInput(tileset.tile_width, (v) => edit((t) => (t.tile_width = v)))),
-    field("tile h", numberInput(tileset.tile_height, (v) => edit((t) => (t.tile_height = v)))),
-    field("columns", numberInput(tileset.columns, (v) => edit((t) => (t.columns = v)))),
-    field("rows", numberInput(tileset.rows, (v) => edit((t) => (t.rows = v)))),
+    field("id", textInput(tileset.id, "tileset.id", (v) => hooks.onRename(v))),
+    field("path", textInput(tileset.path, "tileset.path", (v) => edit((t) => (t.path = v)))),
+    field("tile w", numberInput(tileset.tile_width, "tileset.tile_width", (v) => edit((t) => (t.tile_width = v)))),
+    field("tile h", numberInput(tileset.tile_height, "tileset.tile_height", (v) => edit((t) => (t.tile_height = v)))),
+    field("columns", numberInput(tileset.columns, "tileset.columns", (v) => edit((t) => (t.columns = v)))),
+    field("rows", numberInput(tileset.rows, "tileset.rows", (v) => edit((t) => (t.rows = v)))),
   );
   frag.append(deleteButton(`Delete tileset '${tileset.id}'`, hooks));
   return frag;

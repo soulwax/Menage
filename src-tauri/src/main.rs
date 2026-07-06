@@ -27,6 +27,10 @@ fn asset_pack_bin() -> String {
     std::env::var("MENAGE_ASSET_PACK_BIN").unwrap_or_else(|_| "asset_pack".to_string())
 }
 
+fn sheets_bin() -> String {
+    std::env::var("MENAGE_SHEETS_BIN").unwrap_or_else(|_| "sheets".to_string())
+}
+
 /// Run a CLI in the game root; return stdout on success (stderr as fallback),
 /// or a combined error string so the UI can show the findings verbatim.
 ///
@@ -226,6 +230,28 @@ fn asset_pack_list(game_root: String) -> Result<String, String> {
     run_cli(&asset_pack_bin(), &game_root, &["--dry-run", "--list"])
 }
 
+/// `sheets validate --json` on UNSAVED metadata text (temp file) — the game's
+/// own validator feeding the findings ribbon. `--json` always exits 0; the
+/// stdout is the findings array. `images` adds the exact-dimension checks
+/// (paths resolve against `game_root`, the working directory).
+#[tauri::command]
+fn sheets_validate_json(
+    game_root: String,
+    metadata: String,
+    images: bool,
+) -> Result<String, String> {
+    let path = temp_metadata_path();
+    std::fs::write(&path, metadata).map_err(|e| format!("cannot stage temp metadata: {e}"))?;
+    let path_str = path.to_string_lossy().into_owned();
+    let mut args = vec!["validate", path_str.as_str(), "--json"];
+    if images {
+        args.push("--images");
+    }
+    let result = run_cli(&sheets_bin(), &game_root, &args);
+    let _ = std::fs::remove_file(&path);
+    result
+}
+
 // The command fns above are plain functions; these tests exercise them the
 // way the webview does — including the real `sprite_cutter` binary when the
 // game repo has one built (tests skip gracefully when it is absent, matching
@@ -309,6 +335,33 @@ flip_x = false
     }
 
     #[test]
+    fn sheets_validate_json_reports_the_game_validators_findings() {
+        let root = game_root();
+        let sheets_path = Path::new(&root).join("target/debug/sheets.exe");
+        let sheets_unix = Path::new(&root).join("target/debug/sheets");
+        let bin = if sheets_path.exists() {
+            sheets_path
+        } else if sheets_unix.exists() {
+            sheets_unix
+        } else {
+            eprintln!("skipping: build the sheets CLI in the game repo first");
+            return;
+        };
+        std::env::set_var("MENAGE_SHEETS_BIN", bin.to_string_lossy().into_owned());
+
+        let clean = sheets_validate_json(root.clone(), VALID_METADATA.into(), false)
+            .expect("--json always succeeds");
+        assert!(clean.trim() == "[]", "expected no findings: {clean}");
+
+        // 6 columns, start 4, 3 frames → the game forbids the row wrap.
+        let wrapped = VALID_METADATA.replace("start_column = 0", "start_column = 4");
+        let wrapped = wrapped.replace("frame_count = 6", "frame_count = 3");
+        let findings =
+            sheets_validate_json(root, wrapped, false).expect("--json always succeeds");
+        assert!(findings.contains("forbids row wrap"), "unexpected: {findings}");
+    }
+
+    #[test]
     fn dry_run_validates_temp_metadata_without_touching_the_repo() {
         let root = game_root();
         let Some(cutter) = cutter_exe(&root) else {
@@ -341,6 +394,7 @@ fn main() {
             cutter_dry_run,
             cutter_cut,
             asset_pack_list,
+            sheets_validate_json,
         ])
         .run(tauri::generate_context!())
         .expect("error while running menage");

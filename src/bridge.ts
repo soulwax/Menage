@@ -150,6 +150,26 @@ export function assetPackList(gameRoot: string): Promise<BridgeResult> {
   return call("asset_pack_list", { gameRoot });
 }
 
+/** The game's own validator (`sheets validate --json`) on UNSAVED metadata
+ *  text. Returns the parsed findings array, or null when unavailable (web
+ *  mode, missing binary) — callers fall back to the client lint. */
+export async function sheetsValidateJson(
+  gameRoot: string,
+  metadata: string,
+  images: boolean,
+): Promise<Array<{ level: string; where: string; message: string }> | null> {
+  const r = await call("sheets_validate_json", { gameRoot, metadata, images });
+  if (!r.ok) return null;
+  try {
+    const parsed: unknown = JSON.parse(r.output);
+    return Array.isArray(parsed)
+      ? (parsed as Array<{ level: string; where: string; message: string }>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Folder picker (Tauri only); null when unavailable or cancelled. */
 export async function pickGameRoot(): Promise<string | null> {
   if (!(await inTauri())) return null;

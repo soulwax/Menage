@@ -45,8 +45,14 @@ first** — the game's own parser and validator remain the authority.
   edit flows through one document model (`MenageDoc`) with dirty tracking and
   undo/redo (`Ctrl+Z` / `Ctrl+Y`).
 - **Loupe**: plays the selected animation at its authored fps.
-- **Findings ribbon**: client-side lint (duplicate ids, frames past the grid,
-  the cutter's exact-dimension rule, …) as a green/amber/red chip.
+- **Findings ribbon**: live client-side lint (duplicate ids, the game's
+  no-row-wrap rule, the cutter's exact-dimension rule, …) as a green/amber/red
+  chip — every finding is **clickable** and jumps to the offending sheet,
+  tileset, or animation.
+- **✓ Check**: runs the game's own validator (`sheets validate --json
+  --images`) on the current unsaved instructions — or on the selected
+  descriptor file, which the live lint cannot judge. Its findings replace the
+  ribbon (labelled "game validator") until the next edit.
 - **Save to game**: refuses on error-level findings, then runs the *unsaved*
   text through `sprite_cutter --dry-run` (via a temp file) before writing —
   the editor can never break the repo. `Ctrl+S` works.
@@ -67,13 +73,14 @@ first** — the game's own parser and validator remain the authority.
 
 ```bash
 # 1. Build the game's CLIs (from the EchoWarrior repo root):
-cargo build --bin sprite_cutter --bin asset_pack
+cargo build --bin sprite_cutter --bin asset_pack --bin sheets
 
 # 2. Run Menage (from this folder):
 npm install
 MENAGE_GAME_ROOT=/path/to/EchoWarrior \
 MENAGE_SPRITE_CUTTER_BIN=/path/to/EchoWarrior/target/debug/sprite_cutter \
 MENAGE_ASSET_PACK_BIN=/path/to/EchoWarrior/target/debug/asset_pack \
+MENAGE_SHEETS_BIN=/path/to/EchoWarrior/target/debug/sheets \
 npm run tauri:dev
 ```
 

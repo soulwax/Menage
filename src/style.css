@@ -476,6 +476,108 @@ fieldset.animation legend:hover {
   margin-top: 10px;
 }
 
+/* ── findings ribbon ─────────────────────────────────────────────────────── */
+
+.ribbon-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ribbon-head .spacer {
+  flex: 1;
+}
+
+.ribbon-source {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted-2);
+}
+
+.findings {
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.findings .empty {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+button.finding {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+button.finding:hover:not(:disabled) {
+  border-color: var(--line-2);
+  background: var(--panel-2);
+}
+
+button.finding:disabled {
+  cursor: default;
+}
+
+.finding-where {
+  font-family: var(--mono);
+  font-size: 10px;
+  margin-right: 7px;
+}
+
+.finding.error .finding-where {
+  color: #e08a8a;
+}
+
+.finding.warn .finding-where {
+  color: var(--warn);
+}
+
+.finding-message {
+  color: var(--muted);
+}
+
+/* ── report tones ────────────────────────────────────────────────────────── */
+
+#report {
+  border-left: 2px solid transparent;
+  padding-left: 8px;
+  transition: border-color 0.25s ease;
+}
+
+#report[data-tone="run"] {
+  border-left-color: var(--muted-2);
+}
+
+#report[data-tone="ok"] {
+  border-left-color: var(--teal);
+}
+
+#report[data-tone="fail"] {
+  border-left-color: var(--danger);
+}
+
+.toolbar button:disabled,
+.mini:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .atlas-facts {
   font-family: var(--mono);
   font-size: 10.5px;

@@ -47,6 +47,8 @@ export interface Finding {
   level: "error" | "warn";
   where: string;
   message: string;
+  /** When present, the UI can jump to the offending entry on click. */
+  target?: { type: "sheet" | "tileset"; id: string; animation?: string };
 }
 
 /** Pixel size of an image on disk, when known. Keys are instruction `path`s. */
@@ -201,8 +203,11 @@ export function lint(
   missing?: Set<string>,
 ): Finding[] {
   const findings: Finding[] = [];
-  const err = (where: string, message: string) => findings.push({ level: "error", where, message });
-  const warn = (where: string, message: string) => findings.push({ level: "warn", where, message });
+  type Target = Finding["target"];
+  const err = (where: string, message: string, target?: Target) =>
+    findings.push({ level: "error", where, message, target });
+  const warn = (where: string, message: string, target?: Target) =>
+    findings.push({ level: "warn", where, message, target });
 
   const ids = new Map<string, number>();
   for (const sheet of instructions.sheets) ids.set(sheet.id, (ids.get(sheet.id) ?? 0) + 1);
@@ -214,37 +219,45 @@ export function lint(
 
   for (const sheet of instructions.sheets) {
     const where = sheet.id || "(unnamed sheet)";
-    if (sheet.path === "") err(where, "path is empty");
+    const at: Target = { type: "sheet", id: sheet.id };
+    if (sheet.path === "") err(where, "path is empty", at);
     else if (!sheet.path.startsWith("Assets/"))
-      warn(where, `path '${sheet.path}' is outside Assets/ — it will not ship in data.pak`);
+      warn(where, `path '${sheet.path}' is outside Assets/ — it will not ship in data.pak`, at);
     if (sheet.frame_width < 1 || sheet.frame_height < 1)
-      err(where, "frame_width/frame_height must be at least 1");
-    if (sheet.columns < 1 || sheet.rows < 1) err(where, "columns/rows must be at least 1");
-    if (sheet.output_dir === "") err(where, "output_dir is empty");
+      err(where, "frame_width/frame_height must be at least 1", at);
+    if (sheet.columns < 1 || sheet.rows < 1) err(where, "columns/rows must be at least 1", at);
+    if (sheet.output_dir === "") err(where, "output_dir is empty", at);
     if (sheet.animations.length === 0)
-      warn(where, "no animations — the cutter falls back to one full-grid 'grid' animation");
+      warn(where, "no animations — the cutter falls back to one full-grid 'grid' animation", at);
 
     const seen = new Set<string>();
     for (const animation of sheet.animations) {
       const anWhere = `${where}.${animation.name || "(unnamed)"}`;
-      if (animation.name === "") err(anWhere, "animation name is empty");
-      else if (seen.has(animation.name)) err(anWhere, "duplicate animation name in this sheet");
+      const anAt: Target = { type: "sheet", id: sheet.id, animation: animation.name };
+      if (animation.name === "") err(anWhere, "animation name is empty", anAt);
+      else if (seen.has(animation.name))
+        err(anWhere, "duplicate animation name in this sheet", anAt);
       seen.add(animation.name);
-      if (animation.frame_count < 1) err(anWhere, "frame_count must be at least 1");
-      if (animation.fps <= 0) err(anWhere, "fps must be positive");
+      if (animation.frame_count < 1) err(anWhere, "frame_count must be at least 1", anAt);
+      if (animation.fps <= 0) err(anWhere, "fps must be positive", anAt);
       if (animation.row < 0 || animation.start_column < 0)
-        err(anWhere, "row/start_column must not be negative");
+        err(anWhere, "row/start_column must not be negative", anAt);
 
-      // Mirror the cutter's frame walk: frames may wrap past the end of a row.
-      if (sheet.columns >= 1 && animation.frame_count >= 1) {
-        const lastIndex = animation.start_column + animation.frame_count - 1;
-        const lastRow = animation.row + Math.floor(lastIndex / sheet.columns);
-        if (lastRow >= sheet.rows)
-          err(
-            anWhere,
-            `frames run past the grid (last frame lands on row ${lastRow}, sheet has rows 0–${sheet.rows - 1})`,
-          );
-      }
+      // The game validator's rule: an animation lives on ONE row. Wrapping
+      // past the last column is rejected (`sheets validate` agrees), even
+      // though the cutter's frame walk could technically wrap.
+      if (animation.row >= sheet.rows)
+        err(
+          anWhere,
+          `row ${animation.row} is outside the sheet (rows 0–${sheet.rows - 1})`,
+          anAt,
+        );
+      if (sheet.columns >= 1 && animation.start_column + animation.frame_count > sheet.columns)
+        err(
+          anWhere,
+          `start_column ${animation.start_column} + frame_count ${animation.frame_count} exceeds columns ${sheet.columns} — the game forbids row wrap`,
+          anAt,
+        );
     }
 
     const size = sizes?.get(sheet.path);
@@ -255,20 +268,22 @@ export function lint(
         err(
           where,
           `image is ${size.width}x${size.height} but the grid says ${expectedW}x${expectedH} — sprite_cutter requires an exact match`,
+          at,
         );
     } else if (missing?.has(sheet.path)) {
-      warn(where, `image '${sheet.path}' not found`);
+      warn(where, `image '${sheet.path}' not found`, at);
     }
   }
 
   for (const tileset of instructions.tilesets) {
     const where = tileset.id || "(unnamed tileset)";
-    if (tileset.path === "") err(where, "path is empty");
+    const at: Target = { type: "tileset", id: tileset.id };
+    if (tileset.path === "") err(where, "path is empty", at);
     else if (!tileset.path.startsWith("Assets/"))
-      warn(where, `path '${tileset.path}' is outside Assets/ — it will not ship in data.pak`);
+      warn(where, `path '${tileset.path}' is outside Assets/ — it will not ship in data.pak`, at);
     if (tileset.tile_width < 1 || tileset.tile_height < 1)
-      err(where, "tile_width/tile_height must be at least 1");
-    if (tileset.columns < 1 || tileset.rows < 1) err(where, "columns/rows must be at least 1");
+      err(where, "tile_width/tile_height must be at least 1", at);
+    if (tileset.columns < 1 || tileset.rows < 1) err(where, "columns/rows must be at least 1", at);
   }
 
   return findings;
