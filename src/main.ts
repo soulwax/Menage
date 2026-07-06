@@ -3,10 +3,10 @@
 // doc (edit state), bridge (Tauri/CLI), stage (canvases), form (inspector),
 // atlas (end-product math), inventory (audit).
 
-import { MenageDoc } from "./doc";
+import { AtlasDoc, MenageDoc } from "./doc";
 import { lint, isSaveable, type Finding, type ImageSizes } from "./instructions";
 import { planSheet, type AnimationPlan } from "./atlas";
-import { atlasStem, lintAtlas, parseAtlasFile, type AtlasFile } from "./atlasfile";
+import { atlasStem, createDescriptor, lintAtlas, parseAtlasFile, type AtlasFile } from "./atlasfile";
 import { Stage, sheetGrid, drawContactSheet, contactSheetHit, type Zoom } from "./stage";
 import { Loupe } from "./loupe";
 import { renderInspector, type Selection } from "./form";
@@ -30,7 +30,9 @@ let selectedSprite: string | null = null;
 let activeTab: "stage" | "atlas" = "stage";
 let zoom: Zoom = "fit";
 let unregistered: string[] = [];
-let atlases: AtlasFile[] = [];
+/** One editable document per descriptor file, keyed by repo-relative path. */
+const atlasDocs = new Map<string, AtlasDoc>();
+let atlasPaths: string[] = [];
 /** Findings from the game's `sheets validate --json` (✓ Check). Cleared on
  *  every edit or selection change — they describe a moment, not live state. */
 let checkFindings: Finding[] | null = null;
@@ -99,10 +101,18 @@ function selectedTileset() {
   return doc.instructions.tilesets.find((t) => t.id === current.id) ?? null;
 }
 
-function selectedAtlas(): AtlasFile | null {
+function activeAtlasDoc(): AtlasDoc | null {
   if (selection?.type !== "atlasfile") return null;
-  const current = selection;
-  return atlases.find((a) => a.path === current.path) ?? null;
+  return atlasDocs.get(selection.path) ?? null;
+}
+
+function selectedAtlas(): AtlasFile | null {
+  return activeAtlasDoc()?.atlas ?? null;
+}
+
+/** The document the toolbar (undo/redo/save/dirty dot) acts on. */
+function activeDoc(): MenageDoc | AtlasDoc {
+  return activeAtlasDoc() ?? doc;
 }
 
 function selectedPlans(): AnimationPlan[] {
@@ -196,18 +206,20 @@ function renderLibrary(): void {
   }
   const atlasList = el("atlas-list");
   atlasList.textContent = "";
-  for (const atlas of atlases) {
+  for (const path of atlasPaths) {
+    const atlasDoc = atlasDocs.get(path);
+    if (!atlasDoc) continue;
     const li = document.createElement("li");
-    li.textContent = atlasStem(atlas.path);
+    li.textContent = (atlasDoc.dirty ? "● " : "") + atlasStem(path);
     const meta = document.createElement("span");
     meta.className = "meta";
-    meta.textContent = `${atlas.kind} · ${atlas.sprites.length}`;
+    meta.textContent = `${atlasDoc.atlas.kind} · ${atlasDoc.atlas.sprites.length}`;
     li.append(meta);
-    if (selection?.type === "atlasfile" && selection.path === atlas.path) li.classList.add("selected");
-    li.addEventListener("click", () => select({ type: "atlasfile", path: atlas.path }));
+    if (selection?.type === "atlasfile" && selection.path === path) li.classList.add("selected");
+    li.addEventListener("click", () => select({ type: "atlasfile", path }));
     atlasList.append(li);
   }
-  el("atlas-count").textContent = String(atlases.length);
+  el("atlas-count").textContent = String(atlasPaths.length);
 
   for (const path of unregistered) {
     const li = document.createElement("li");
@@ -217,9 +229,15 @@ function renderLibrary(): void {
     name.title = path;
     const registerButton = document.createElement("button");
     registerButton.className = "mini ghost";
-    registerButton.textContent = "+ register";
+    registerButton.textContent = "+ sheet";
+    registerButton.title = "Register as a cutting instruction in spritesheets.toml";
     registerButton.addEventListener("click", () => void registerPng(path));
-    li.append(name, registerButton);
+    const atlasButton = document.createElement("button");
+    atlasButton.className = "mini ghost";
+    atlasButton.textContent = "+ atlas";
+    atlasButton.title = "Create a new grid descriptor TOML for this image";
+    atlasButton.addEventListener("click", () => void registerPngAsAtlas(path));
+    li.append(name, registerButton, atlasButton);
     unregList.append(li);
   }
 
@@ -341,11 +359,14 @@ function renderRibbon(): void {
 }
 
 function renderToolbar(): void {
-  el<HTMLButtonElement>("btn-undo").disabled = busy || !doc.canUndo;
-  el<HTMLButtonElement>("btn-redo").disabled = busy || !doc.canRedo;
+  const active = activeDoc();
+  el<HTMLButtonElement>("btn-undo").disabled = busy || !active.canUndo;
+  el<HTMLButtonElement>("btn-redo").disabled = busy || !active.canRedo;
   el<HTMLButtonElement>("btn-cut-sheet").disabled = busy || selection?.type !== "sheet";
-  el<HTMLButtonElement>("btn-save").disabled = busy || !doc.dirty;
-  el("doc-name").textContent = (doc.dirty ? "● " : "") + "spritesheets.toml";
+  el<HTMLButtonElement>("btn-save").disabled = busy || !active.dirty;
+  const activeName =
+    active instanceof AtlasDoc ? `${atlasStem(active.atlas.path)}.toml` : "spritesheets.toml";
+  el("doc-name").textContent = (active.dirty ? "● " : "") + activeName;
   el("game-root").textContent = gameRoot === "" ? "pick game repo…" : gameRoot;
 }
 
@@ -378,9 +399,25 @@ function restoreFocus(saved: { key: string; caret: number | null } | null): void
 function renderAll(): void {
   const focus = captureFocus();
   renderLibrary();
-  renderInspector(el("inspector"), doc, selection, selectedAnimation, selectedAtlas(), selectedSprite, {
+  renderInspector(el("inspector"), doc, selection, selectedAnimation, activeAtlasDoc(), selectedSprite, {
     onSelectAnimation: (name) => selectAnimation(name),
     onSelectSprite: (name) => selectSprite(name),
+    onRenameSprite: (newName) => {
+      const atlasDoc = activeAtlasDoc();
+      if (!atlasDoc || selectedSprite === null || newName === "" || newName === selectedSprite)
+        return;
+      const oldName = selectedSprite;
+      selectedSprite = newName;
+      stage.selectedSprite = newName;
+      atlasDoc.apply((atlas) => {
+        const sprite = atlas.sprites.find((s) => s.name === oldName);
+        if (sprite) sprite.name = newName;
+        // Animations reference frames by sprite name — renames follow.
+        for (const animation of atlas.animations) {
+          animation.frames = animation.frames.map((f) => (f === oldName ? newName : f));
+        }
+      });
+    },
     onRename: (newId) => {
       if (selection?.type !== "sheet" && selection?.type !== "tileset") return;
       const current = selection;
@@ -464,28 +501,69 @@ async function loadDoc(): Promise<void> {
 
 async function scanUnregistered(): Promise<void> {
   const pngs = await bridge.listGameFiles(gameRoot, SCAN_ROOT, "png");
-  unregistered = crossReference(doc.instructions, pngs, []).unregistered;
+  const byInstructions = crossReference(doc.instructions, pngs, []).unregistered;
+  // Images referenced by a descriptor are registered too — either family counts.
+  const descriptorImages = new Set([...atlasDocs.values()].map((d) => d.atlas.image));
+  unregistered = byInstructions.filter((path) => !descriptorImages.has(path));
   renderAll();
+}
+
+/** Shared change handling for every atlas document. */
+function watchAtlasDoc(atlasDoc: AtlasDoc): AtlasDoc {
+  atlasDoc.onChange(() => {
+    checkFindings = null;
+    // A rename/removal can orphan the selected sprite — clear it cleanly.
+    if (selectedSprite !== null && !atlasDoc.atlas.sprites.some((s) => s.name === selectedSprite)) {
+      selectedSprite = null;
+      stage.selectedSprite = null;
+      loupe.setAnimation(null, null);
+    }
+    renderAll();
+  });
+  return atlasDoc;
 }
 
 /** Discover atlas/grid descriptors: every TOML under Assets/Metadata that
  *  parses as one. Non-descriptor TOMLs (spritesheets.toml itself, weather
- *  files, …) simply don't match the schema and are skipped. */
+ *  files, …) simply don't match the schema and are skipped. Reload discards
+ *  unsaved descriptor edits — same semantics as the instruction doc. */
 async function scanAtlases(): Promise<void> {
   const paths = await bridge.listGameFiles(gameRoot, "Assets/Metadata", "toml");
-  const found = await Promise.all(
+  atlasDocs.clear();
+  atlasPaths = [];
+  await Promise.all(
     paths.map(async (path) => {
       const text = await bridge.readGameText(gameRoot, path);
-      if (!text.ok) return null;
+      if (!text.ok) return;
       try {
-        return parseAtlasFile(path, text.output);
+        const atlas = parseAtlasFile(path, text.output);
+        if (atlas) atlasDocs.set(path, watchAtlasDoc(new AtlasDoc(atlas)));
       } catch {
-        return null;
+        // not a descriptor — skipped by design
       }
     }),
   );
-  atlases = found.filter((a): a is AtlasFile => a !== null);
+  atlasPaths = [...atlasDocs.keys()].sort();
   renderAll();
+}
+
+/** Create a new grid descriptor TOML for an image — the file exists only in
+ *  the editor until "Save to game" passes the `sheets validate` gate. */
+async function registerPngAsAtlas(imagePath: string): Promise<void> {
+  await ensureImage(imagePath);
+  const stem = imagePath.split("/").pop()?.replace(/\.png$/i, "") ?? "new_atlas";
+  const clean = stem.toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+  let path = `Assets/Metadata/${clean}_spritesheet.toml`;
+  let n = 2;
+  while (atlasDocs.has(path)) path = `Assets/Metadata/${clean}_spritesheet_${n++}.toml`;
+  const atlas = createDescriptor(path, imagePath, imageSizes.get(imagePath) ?? null);
+  const atlasDoc = watchAtlasDoc(new AtlasDoc(atlas));
+  atlasDoc.dirty = true; // exists only in the editor until saved
+  atlasDocs.set(path, atlasDoc);
+  atlasPaths = [...atlasDocs.keys()].sort();
+  await scanUnregistered();
+  select({ type: "atlasfile", path });
+  say(`New descriptor '${path}' — ${atlas.columns}×${atlas.rows} grid over ${imagePath}.\nAdjust the grid, name the cells that matter, then Save to game.`);
 }
 
 async function registerPng(path: string): Promise<void> {
@@ -512,7 +590,55 @@ async function registerPng(path: string): Promise<void> {
   select({ type: "sheet", id });
 }
 
+/** Save the selected descriptor: client lint blocks first, then the game's
+ *  `sheets validate` gate (required inside Tauri — no gate, no write). */
+async function saveDescriptor(atlasDoc: AtlasDoc): Promise<void> {
+  const clientFindings = lintAtlas(atlasDoc.atlas, imageSizes.get(atlasDoc.atlas.image));
+  const clientErrors = clientFindings.filter((f) => f.level === "error");
+  if (clientErrors.length > 0) {
+    say(
+      "Refusing to save — fix the error-level findings first:\n" +
+        clientErrors.map((f) => `[error] ${f.where}: ${f.message}`).join("\n"),
+      "fail",
+    );
+    return;
+  }
+  const serialized = atlasDoc.serialize();
+  if (await bridge.inTauri()) {
+    const gate = await bridge.sheetsValidateJson(gameRoot, serialized, true);
+    if (gate === null) {
+      say(
+        "Descriptor saves are gated by the game's `sheets` CLI, which is not\n" +
+          "reachable (set MENAGE_SHEETS_BIN or put `sheets` on PATH). Nothing written.",
+        "fail",
+      );
+      return;
+    }
+    const gateErrors = gate.filter((f) => f.level === "error");
+    if (gateErrors.length > 0) {
+      say(
+        "The game's validator rejected the descriptor — nothing written:\n" +
+          gateErrors.map((f) => `[error] ${f.where}: ${f.message}`).join("\n"),
+        "fail",
+      );
+      return;
+    }
+  }
+  const written = await bridge.writeGameText(gameRoot, atlasDoc.atlas.path, serialized);
+  if (!written.ok) {
+    say(`Save failed:\n${written.output}`, "fail");
+    return;
+  }
+  atlasDoc.markSaved();
+  say(`Saved ${atlasDoc.atlas.path}.`, "ok");
+}
+
 async function saveToGame(): Promise<void> {
+  const atlasDoc = activeAtlasDoc();
+  if (atlasDoc) {
+    await saveDescriptor(atlasDoc);
+    return;
+  }
   const findings = currentFindings();
   if (!isSaveable(findings)) {
     say(
@@ -571,17 +697,8 @@ async function runAudit(): Promise<void> {
  *  file. Results land in the ribbon as clickable findings. */
 async function runCheck(): Promise<void> {
   const atlas = selectedAtlas();
-  let metadata: string;
-  if (atlas) {
-    const text = await bridge.readGameText(gameRoot, atlas.path);
-    if (!text.ok) {
-      say(`Cannot read '${atlas.path}':\n${text.output}`, "fail");
-      return;
-    }
-    metadata = text.output;
-  } else {
-    metadata = doc.serialize();
-  }
+  // Validate the CURRENT edit state, saved or not — that is the whole point.
+  const metadata = activeAtlasDoc()?.serialize() ?? doc.serialize();
   const results = await bridge.sheetsValidateJson(gameRoot, metadata, true);
   if (results === null) {
     say(
@@ -750,8 +867,8 @@ function wire(): void {
   el("btn-reload").addEventListener("click", () =>
     void loadDoc().then(scanUnregistered).then(scanAtlases),
   );
-  el("btn-undo").addEventListener("click", () => doc.undo());
-  el("btn-redo").addEventListener("click", () => doc.redo());
+  el("btn-undo").addEventListener("click", () => activeDoc().undo());
+  el("btn-redo").addEventListener("click", () => activeDoc().redo());
   el("btn-save").addEventListener("click", () =>
     void runExclusive("Validating and saving…", saveToGame),
   );
@@ -804,13 +921,13 @@ function wire(): void {
     const key = e.key.toLowerCase();
     if (key === "z" && !e.shiftKey) {
       e.preventDefault();
-      doc.undo();
+      activeDoc().undo();
     } else if (key === "y" || (key === "z" && e.shiftKey)) {
       e.preventDefault();
-      doc.redo();
+      activeDoc().redo();
     } else if (key === "s") {
       e.preventDefault();
-      void saveToGame();
+      void runExclusive("Validating and saving…", saveToGame);
     }
   });
 

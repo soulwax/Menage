@@ -578,6 +578,16 @@ button.finding:disabled {
   cursor: default;
 }
 
+.pair {
+  display: flex;
+  gap: 6px;
+}
+
+.pair input {
+  min-width: 0;
+  flex: 1;
+}
+
 .atlas-facts {
   font-family: var(--mono);
   font-size: 10.5px;

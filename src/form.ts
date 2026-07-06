@@ -2,9 +2,9 @@
 // through doc.apply() (one undo step per changed field); main re-renders on
 // doc change, so this file only builds DOM and forwards edits.
 
-import type { MenageDoc } from "./doc";
+import type { AtlasDoc, MenageDoc } from "./doc";
 import type { AnimationDef, SheetDef, TilesetDef } from "./instructions";
-import type { AtlasFile } from "./atlasfile";
+import type { AtlasFile, AtlasSprite } from "./atlasfile";
 
 export type Selection =
   | { type: "sheet"; id: string }
@@ -19,6 +19,8 @@ export interface InspectorHooks {
   /** Rename the selected entry: updates the selection BEFORE the doc mutation
    *  so the single re-render lands on the renamed entry (no lost selection). */
   onRename: (newId: string) => void;
+  /** Same convention for the selected atlas sprite. */
+  onRenameSprite: (newName: string) => void;
 }
 
 const SHEET_KINDS = ["character", "tile_animation", "object_animation", "particle"];
@@ -94,7 +96,7 @@ export function renderInspector(
   doc: MenageDoc,
   selection: Selection,
   selectedAnimation: string | null,
-  atlas: AtlasFile | null,
+  atlasDoc: AtlasDoc | null,
   selectedSprite: string | null,
   hooks: InspectorHooks,
 ): void {
@@ -108,7 +110,7 @@ export function renderInspector(
   }
 
   if (selection.type === "atlasfile") {
-    if (atlas) host.append(atlasPanel(atlas, selectedSprite, hooks));
+    if (atlasDoc) host.append(atlasForm(atlasDoc, selectedSprite, hooks));
     return;
   }
 
@@ -124,33 +126,145 @@ export function renderInspector(
   host.append(sheetForm(doc, sheet, selectedAnimation, hooks));
 }
 
-/** Read-only descriptor panel: the header facts plus the named sprites as a
- *  clickable roster (placeholder-named cells stay discoverable via hover on
- *  the stage instead of flooding the list). */
-function atlasPanel(
-  atlas: AtlasFile,
+/** Editable descriptor form: the grid header, one focused sprite editor (the
+ *  565-cell symbols atlas must not become 565 forms), and the named roster.
+ *  Every commit goes through the AtlasDoc; `sheets validate` gates the save. */
+function atlasForm(
+  atlasDoc: AtlasDoc,
   selectedSprite: string | null,
   hooks: InspectorHooks,
 ): DocumentFragment {
+  const atlas = atlasDoc.atlas;
+  const edit = (mutate: (a: AtlasFile) => void) => atlasDoc.apply(mutate);
+
   const frag = document.createDocumentFragment();
   const head = document.createElement("h3");
   head.textContent = `Atlas — ${atlas.path.split("/").pop()}`;
   frag.append(head);
 
-  const facts = document.createElement("pre");
-  facts.className = "atlas-facts";
-  facts.textContent = [
-    `image    ${atlas.image}`,
-    `type     ${atlas.kind}`,
-    `tile     ${atlas.tileWidth}×${atlas.tileHeight}`,
-    `grid     ${atlas.columns}×${atlas.rows}` +
-      (atlas.paddingX || atlas.paddingY ? `  gutter ${atlas.paddingX},${atlas.paddingY}` : ""),
-    `sprites  ${atlas.sprites.length}`,
-    "",
-    "read-only — descriptors have no CLI validator to gate a save with yet",
-  ].join("\n");
-  frag.append(facts);
+  const kindSel = document.createElement("select");
+  kindSel.dataset.focusKey = "atlas.kind";
+  for (const kind of ["grid", "atlas"]) {
+    const option = document.createElement("option");
+    option.value = kind;
+    option.textContent = kind;
+    option.selected = kind === atlas.kind;
+    kindSel.append(option);
+  }
+  kindSel.addEventListener("change", () =>
+    edit((a) => (a.kind = kindSel.value as AtlasFile["kind"])),
+  );
 
+  frag.append(
+    field("image", textInput(atlas.image, "atlas.image", (v) => edit((a) => (a.image = v))), "PNG path, relative to the game repo root"),
+    field("type", kindSel),
+    field("tile w", numberInput(atlas.tileWidth, "atlas.tile_width", (v) => edit((a) => (a.tileWidth = v)))),
+    field("tile h", numberInput(atlas.tileHeight, "atlas.tile_height", (v) => edit((a) => (a.tileHeight = v)))),
+    field("columns", numberInput(atlas.columns, "atlas.columns", (v) => edit((a) => (a.columns = v)))),
+    field("rows", numberInput(atlas.rows, "atlas.rows", (v) => edit((a) => (a.rows = v)))),
+    field("origin", numberPair(atlas.originX, atlas.originY, "atlas.origin", (x, y) => edit((a) => { a.originX = x; a.originY = y; }))),
+    field("gutter", numberPair(atlas.paddingX, atlas.paddingY, "atlas.padding", (x, y) => edit((a) => { a.paddingX = x; a.paddingY = y; })), "padding_x / padding_y between cells"),
+  );
+
+  if (atlas.animations.length > 0) {
+    const facts = document.createElement("pre");
+    facts.className = "atlas-facts";
+    facts.textContent =
+      `animations  ${atlas.animations.length} (preserved verbatim on save)\n` +
+      atlas.animations.map((a) => `  ${a.name} · ${a.frames.length}f`).join("\n");
+    frag.append(facts);
+  }
+
+  // The one focused sprite editor.
+  const spritesHead = document.createElement("div");
+  spritesHead.className = "lib-group-head";
+  const spritesTitle = document.createElement("h3");
+  spritesTitle.textContent = `Sprites (${atlas.sprites.length})`;
+  const addButton = document.createElement("button");
+  addButton.className = "mini ghost";
+  addButton.textContent = "+ add";
+  addButton.addEventListener("click", () => {
+    let name = `sprite_${atlas.sprites.length}`;
+    let n = atlas.sprites.length;
+    while (atlas.sprites.some((s) => s.name === name)) name = `sprite_${++n}`;
+    const taken = new Set(atlas.sprites.map((s) => s.index));
+    let index = 0;
+    while (taken.has(index)) index++;
+    edit((a) => {
+      a.sprites.push({
+        name,
+        tags: [],
+        index: a.kind === "grid" ? index : null,
+        x: a.kind === "grid" ? null : 0,
+        y: a.kind === "grid" ? null : 0,
+        w: a.kind === "grid" ? null : a.tileWidth,
+        h: a.kind === "grid" ? null : a.tileHeight,
+        pivotX: null,
+        pivotY: null,
+        trimmed: false,
+        rect: { x: 0, y: 0, w: 0, h: 0 },
+      });
+    });
+    hooks.onSelectSprite(name);
+  });
+  spritesHead.append(spritesTitle, addButton);
+  frag.append(spritesHead);
+
+  const sprite = atlas.sprites.find((s) => s.name === selectedSprite);
+  if (!sprite) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = "Click a cell on the stage (or a name below) to edit that sprite.";
+    frag.append(p);
+  } else {
+    const set = document.createElement("fieldset");
+    set.className = "animation selected";
+    const legend = document.createElement("legend");
+    legend.textContent = sprite.name;
+    set.append(legend);
+
+    const spriteName = sprite.name;
+    const editSprite = (mutate: (s: AtlasSprite) => void) =>
+      edit((a) => {
+        const target = a.sprites.find((s) => s.name === spriteName);
+        if (target) mutate(target);
+      });
+
+    set.append(
+      field("name", textInput(sprite.name, "sprite.name", (v) => hooks.onRenameSprite(v))),
+      field(
+        "tags",
+        textInput(sprite.tags.join(", "), "sprite.tags", (v) =>
+          editSprite((s) => (s.tags = v.split(",").map((t) => t.trim()).filter((t) => t !== ""))),
+        ),
+        "comma-separated",
+      ),
+    );
+    if (sprite.index !== null) {
+      set.append(
+        field("index", numberInput(sprite.index, "sprite.index", (v) => editSprite((s) => (s.index = v)))),
+      );
+    } else {
+      set.append(
+        field("x / y", numberPair(sprite.x ?? 0, sprite.y ?? 0, "sprite.pos", (x, y) => editSprite((s) => { s.x = x; s.y = y; }))),
+        field("w / h", numberPair(sprite.w ?? 0, sprite.h ?? 0, "sprite.size", (w, h) => editSprite((s) => { s.w = w; s.h = h; }))),
+      );
+    }
+
+    const remove = document.createElement("button");
+    remove.className = "mini danger";
+    remove.textContent = "remove";
+    remove.addEventListener("click", () => {
+      hooks.onSelectSprite(null);
+      edit((a) => {
+        a.sprites = a.sprites.filter((s) => s.name !== spriteName);
+      });
+    });
+    set.append(remove);
+    frag.append(set);
+  }
+
+  // Named roster (placeholder-named cells stay discoverable via the stage).
   const named = atlas.sprites.filter((s) => !/^(portrait|sprite|tile)_r?\d/i.test(s.name));
   const listHead = document.createElement("div");
   listHead.className = "lib-group-head";
@@ -161,19 +275,34 @@ function atlasPanel(
 
   const list = document.createElement("ul");
   list.className = "lib-list";
-  for (const sprite of named) {
+  for (const entry of named) {
     const li = document.createElement("li");
-    li.textContent = sprite.name;
+    li.textContent = entry.name;
     const meta = document.createElement("span");
     meta.className = "meta";
-    meta.textContent = `${sprite.rect.x},${sprite.rect.y}`;
+    meta.textContent = `${entry.rect.x},${entry.rect.y}`;
     li.append(meta);
-    if (sprite.name === selectedSprite) li.classList.add("selected");
-    li.addEventListener("click", () => hooks.onSelectSprite(sprite.name));
+    if (entry.name === selectedSprite) li.classList.add("selected");
+    li.addEventListener("click", () => hooks.onSelectSprite(entry.name));
     list.append(li);
   }
   frag.append(list);
   return frag;
+}
+
+/** Two small number inputs sharing one field row (x/y, w/h pairs). */
+function numberPair(
+  a: number,
+  b: number,
+  focusKey: string,
+  commit: (a: number, b: number) => void,
+): HTMLDivElement {
+  const wrap = document.createElement("div");
+  wrap.className = "pair";
+  const first = numberInput(a, `${focusKey}.a`, (v) => commit(v, Number(second.value) || b));
+  const second = numberInput(b, `${focusKey}.b`, (v) => commit(Number(first.value) || a, v));
+  wrap.append(first, second);
+  return wrap;
 }
 
 function sheetForm(

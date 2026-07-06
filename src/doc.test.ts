@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MenageDoc } from "./doc";
+import { AtlasDoc, MenageDoc } from "./doc";
+import { createDescriptor } from "./atlasfile";
 
 const MINIMAL = `
 [[sheets]]
@@ -47,6 +48,20 @@ describe("MenageDoc", () => {
     expect(doc.canRedo).toBe(false);
     expect(doc.instructions.sheets[0].rows).toBe(3);
     expect(doc.instructions.sheets[0].columns).toBe(1);
+  });
+
+  it("AtlasDoc refreshes derived rects after every mutation", () => {
+    const atlasDoc = new AtlasDoc(
+      createDescriptor("x.toml", "img.png", { width: 96, height: 32 }),
+    );
+    expect(atlasDoc.atlas.sprites[7].rect.x).toBe(16);
+    // Widening the tiles moves every derived rect.
+    atlasDoc.apply((atlas) => (atlas.tileWidth = 32));
+    expect(atlasDoc.atlas.sprites[7].rect.x).toBe(32);
+    expect(atlasDoc.dirty).toBe(true);
+    atlasDoc.undo();
+    expect(atlasDoc.atlas.sprites[7].rect.x).toBe(16);
+    expect(atlasDoc.serialize()).toContain('type = "grid"');
   });
 
   it("notifies subscribers on every state change", () => {

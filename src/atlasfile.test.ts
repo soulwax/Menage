@@ -1,5 +1,14 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { atlasStem, lintAtlas, parseAtlasFile, rectForIndex, spriteAt } from "./atlasfile";
+import {
+  atlasStem,
+  createDescriptor,
+  lintAtlas,
+  parseAtlasFile,
+  rectForIndex,
+  serializeAtlasFile,
+  spriteAt,
+} from "./atlasfile";
 
 const ATLAS_SAMPLE = `
 image = "Assets/Graphics/sprites/characters/portraits_6.png"
@@ -57,9 +66,10 @@ describe("parseAtlasFile", () => {
     expect(atlas).not.toBeNull();
     expect(atlas!.kind).toBe("atlas");
     expect(atlas!.paddingX).toBe(1);
-    expect(atlas!.sprites[0]).toEqual({
+    expect(atlas!.sprites[0]).toMatchObject({
       name: "eve",
       tags: ["portrait", "named"],
+      index: null,
       rect: { x: 753, y: 502, w: 250, h: 250 },
     });
   });
@@ -112,5 +122,80 @@ describe("lintAtlas", () => {
 describe("atlasStem", () => {
   it("shortens the descriptor path for the library", () => {
     expect(atlasStem("Assets/Metadata/portraits_6.toml")).toBe("portraits_6");
+  });
+});
+
+describe("serializeAtlasFile — full fidelity against the real game files", () => {
+  const game = (rel: string) => readFileSync(`../../${rel}`, "utf8");
+
+  it("round-trips the real portraits descriptor losslessly", () => {
+    const original = parseAtlasFile(
+      "Assets/Metadata/portraits_6.toml",
+      game("Assets/Metadata/portraits_6.toml"),
+    )!;
+    const again = parseAtlasFile(original.path, serializeAtlasFile(original));
+    expect(again).toEqual(original);
+  });
+
+  it("preserves [[animations]] through the round-trip (player has 10)", () => {
+    const original = parseAtlasFile(
+      "Assets/Metadata/player_spritesheet.toml",
+      game("Assets/Metadata/player_spritesheet.toml"),
+    )!;
+    expect(original.animations.length).toBeGreaterThanOrEqual(10);
+    expect(original.sprites[0].index).not.toBeNull();
+    const again = parseAtlasFile(original.path, serializeAtlasFile(original));
+    expect(again).toEqual(original);
+    expect(again!.animations).toEqual(original.animations);
+  });
+
+  it("a rename that flows into animation frames still lints clean", () => {
+    const atlas = parseAtlasFile(
+      "Assets/Metadata/player_spritesheet.toml",
+      game("Assets/Metadata/player_spritesheet.toml"),
+    )!;
+    const oldName = atlas.sprites[0].name;
+    atlas.sprites[0].name = "renamed_cell";
+    for (const animation of atlas.animations) {
+      animation.frames = animation.frames.map((f) => (f === oldName ? "renamed_cell" : f));
+    }
+    expect(lintAtlas(atlas).filter((f) => f.level === "error")).toEqual([]);
+  });
+
+  it("lint catches an animation frame orphaned by a rename", () => {
+    const atlas = parseAtlasFile(
+      "Assets/Metadata/player_spritesheet.toml",
+      game("Assets/Metadata/player_spritesheet.toml"),
+    )!;
+    atlas.sprites[0].name = "renamed_without_frames";
+    const findings = lintAtlas(atlas);
+    expect(findings.some((f) => f.message.includes("names no declared sprite"))).toBe(true);
+  });
+});
+
+describe("createDescriptor", () => {
+  it("derives a 16px grid when the image divides evenly", () => {
+    const atlas = createDescriptor(
+      "Assets/Metadata/barrel_spritesheet.toml",
+      "Assets/Graphics/sprites/objects/barrel.png",
+      { width: 96, height: 32 },
+    );
+    expect(atlas.kind).toBe("grid");
+    expect([atlas.tileWidth, atlas.tileHeight]).toEqual([16, 16]);
+    expect([atlas.columns, atlas.rows]).toEqual([6, 2]);
+    expect(atlas.sprites).toHaveLength(12);
+    expect(atlas.sprites[7]).toMatchObject({
+      name: "barrel_spritesheet_7",
+      index: 7,
+      rect: { x: 16, y: 16, w: 16, h: 16 },
+    });
+    expect(lintAtlas(atlas, { width: 96, height: 32 })).toEqual([]);
+  });
+
+  it("falls back to one full-image cell for odd sizes", () => {
+    const atlas = createDescriptor("x.toml", "img.png", { width: 100, height: 30 });
+    expect([atlas.columns, atlas.rows]).toEqual([1, 1]);
+    expect([atlas.tileWidth, atlas.tileHeight]).toEqual([100, 30]);
+    expect(atlas.sprites).toHaveLength(1);
   });
 });

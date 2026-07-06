@@ -60,12 +60,21 @@ first** — the game's own parser and validator remain the authority.
   CLI report shows verbatim. Cutting is blocked while the doc is dirty.
 - **Unregistered scan**: PNGs under `Assets/Graphics/sprites` that no
   instruction references; one click registers a sheet with a suggested id.
-- **Atlases (read-only)**: every descriptor under `Assets/Metadata` —
+- **Atlases (fully editable)**: every descriptor under `Assets/Metadata` —
   `type = "atlas"` free rects (portraits, symbols) and `type = "grid"`
   indexed cells (the per-sheet descriptors) — rendered over its image with
   sprite outlines, adaptive labels, hover hit-testing (gutters respected),
-  a clickable named-sprite roster, and bounds/duplicate lint. Read-only
-  until these files gain a CLI validator to gate a save with.
+  and a clickable named-sprite roster. Each descriptor is its own document
+  (undo/redo, dirty dot in the library, the toolbar follows the active file):
+  edit the grid header, click a cell to rename/tag/re-place it, add or remove
+  sprites. Renames flow into `[[animations]]` frame references, and
+  animations are preserved verbatim through every save. **Saves are gated by
+  the game's own `sheets validate --images`** — inside Tauri, no gate means
+  no write.
+- **Create descriptors**: `+ atlas` on any unregistered PNG scaffolds a new
+  `Assets/Metadata/<stem>_spritesheet.toml` (16px grid when the image divides
+  evenly, one full-image cell otherwise), enumerated with stable cell names —
+  the file exists only in the editor until the gated save writes it.
 - **Audit**: cross-references instructions × disk × `asset_pack --dry-run
   --list` — what ships, what doesn't, what's orphaned.
 
