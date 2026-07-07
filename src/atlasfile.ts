@@ -295,6 +295,14 @@ export function spriteAt(atlas: AtlasFile, x: number, y: number): AtlasSprite | 
   return null;
 }
 
+/** Swap two frames in an animation's frame list by index. Out-of-range or
+ *  equal indices are a no-op (defensive against stale UI event handlers
+ *  firing after a concurrent edit). */
+export function swapAnimationFrames(animation: AtlasAnimation, a: number, b: number): void {
+  if (a === b || a < 0 || b < 0 || a >= animation.frames.length || b >= animation.frames.length) return;
+  [animation.frames[a], animation.frames[b]] = [animation.frames[b], animation.frames[a]];
+}
+
 /** Advisory findings; `sheets validate` (the game CLI) is the save gate. */
 export function lintAtlas(
   atlas: AtlasFile,

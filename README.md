@@ -67,10 +67,16 @@ first** — the game's own parser and validator remain the authority.
   and a clickable named-sprite roster. Each descriptor is its own document
   (undo/redo, dirty dot in the library, the toolbar follows the active file):
   edit the grid header, click a cell to rename/tag/re-place it, add or remove
-  sprites. Renames flow into `[[animations]]` frame references, and
-  animations are preserved verbatim through every save. **Saves are gated by
-  the game's own `sheets validate --images`** — inside Tauri, no gate means
-  no write.
+  sprites. **Saves are gated by the game's own `sheets validate --images`** —
+  inside Tauri, no gate means no write.
+- **`[[animations]]` editor**: add/rename/remove a descriptor's animations,
+  set `fps` or `frame_duration_ms`, and build the frame list by **clicking
+  cells on the stage** while an animation is open — the primary, fastest way
+  to author a sequence — with up/down reorder and per-frame remove for
+  cleanup. Renaming a sprite propagates into every animation's frame
+  references automatically, in both directions (edit the sprite, or the
+  animation editor, either updates the other). The loupe previews the open
+  animation live as you edit it.
 - **Create descriptors**: `+ atlas` on any unregistered PNG scaffolds a new
   `Assets/Metadata/<stem>_spritesheet.toml` (16px grid when the image divides
   evenly, one full-image cell otherwise), enumerated with stable cell names —

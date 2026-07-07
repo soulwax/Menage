@@ -6,7 +6,14 @@
 import { AtlasDoc, MenageDoc } from "./doc";
 import { lint, isSaveable, type Finding, type ImageSizes } from "./instructions";
 import { planSheet, type AnimationPlan } from "./atlas";
-import { atlasStem, createDescriptor, lintAtlas, parseAtlasFile, type AtlasFile } from "./atlasfile";
+import {
+  atlasStem,
+  createDescriptor,
+  lintAtlas,
+  parseAtlasFile,
+  type AtlasAnimation,
+  type AtlasFile,
+} from "./atlasfile";
 import { Stage, sheetGrid, drawContactSheet, contactSheetHit, type Zoom } from "./stage";
 import { Loupe } from "./loupe";
 import { renderInspector, type Selection } from "./form";
@@ -27,6 +34,11 @@ let gameRoot = "";
 let selection: Selection = null;
 let selectedAnimation: string | null = null;
 let selectedSprite: string | null = null;
+/** The atlas/grid descriptor animation currently open for editing (separate
+ *  from selectedSprite — you can browse the roster while an animation stays
+ *  open). Non-null also puts the stage in "click a cell to append a frame"
+ *  mode. */
+let selectedAtlasAnimation: string | null = null;
 let activeTab: "stage" | "atlas" = "stage";
 let zoom: Zoom = "fit";
 let unregistered: string[] = [];
@@ -160,10 +172,47 @@ function selectSprite(name: string | null): void {
   renderAll();
 }
 
+/** Builds the same AnimationPlan shape the sheet-animation loupe uses, from a
+ *  descriptor animation's frame names resolved against the atlas's sprites.
+ *  Frames naming no sprite are skipped (the ribbon already flags them as an
+ *  error; the loupe just doesn't crash on them). */
+function planAtlasAnimation(atlas: AtlasFile, animation: AtlasAnimation): AnimationPlan {
+  const frames = animation.frames
+    .map((name) => atlas.sprites.find((s) => s.name === name))
+    .filter((s): s is NonNullable<typeof s> => s !== undefined)
+    .map((sprite) => ({
+      sx: sprite.rect.x,
+      sy: sprite.rect.y,
+      w: sprite.rect.w,
+      h: sprite.rect.h,
+      flipX: false,
+      filename: sprite.name,
+    }));
+  return {
+    name: animation.name,
+    fps: animation.fps ?? (animation.frameDurationMs ? 1000 / animation.frameDurationMs : 8),
+    dir: atlas.path,
+    frames,
+    manifestToml: "",
+  };
+}
+
+function selectAtlasAnimation(name: string | null): void {
+  selectedAtlasAnimation = name;
+  const atlas = selectedAtlas();
+  const animation = name ? atlas?.animations.find((a) => a.name === name) : null;
+  loupe.setAnimation(
+    atlas && animation ? cachedImage(atlas.image) : null,
+    atlas && animation ? planAtlasAnimation(atlas, animation) : null,
+  );
+  renderAll();
+}
+
 function select(next: Selection): void {
   selection = next;
   selectedAnimation = null;
   selectedSprite = null;
+  selectedAtlasAnimation = null;
   checkFindings = null;
   stage.selectedAnimation = null;
   stage.selectedSprite = null;
@@ -399,53 +448,79 @@ function restoreFocus(saved: { key: string; caret: number | null } | null): void
 function renderAll(): void {
   const focus = captureFocus();
   renderLibrary();
-  renderInspector(el("inspector"), doc, selection, selectedAnimation, activeAtlasDoc(), selectedSprite, {
-    onSelectAnimation: (name) => selectAnimation(name),
-    onSelectSprite: (name) => selectSprite(name),
-    onRenameSprite: (newName) => {
-      const atlasDoc = activeAtlasDoc();
-      if (!atlasDoc || selectedSprite === null || newName === "" || newName === selectedSprite)
-        return;
-      const oldName = selectedSprite;
-      selectedSprite = newName;
-      stage.selectedSprite = newName;
-      atlasDoc.apply((atlas) => {
-        const sprite = atlas.sprites.find((s) => s.name === oldName);
-        if (sprite) sprite.name = newName;
-        // Animations reference frames by sprite name — renames follow.
-        for (const animation of atlas.animations) {
-          animation.frames = animation.frames.map((f) => (f === oldName ? newName : f));
-        }
-      });
+  renderInspector(
+    el("inspector"),
+    doc,
+    selection,
+    selectedAnimation,
+    activeAtlasDoc(),
+    selectedSprite,
+    selectedAtlasAnimation,
+    {
+      onSelectAnimation: (name) => selectAnimation(name),
+      onSelectSprite: (name) => selectSprite(name),
+      onSelectAtlasAnimation: (name) => selectAtlasAnimation(name),
+      onRenameAtlasAnimation: (newName) => {
+        const atlasDoc = activeAtlasDoc();
+        if (
+          !atlasDoc ||
+          selectedAtlasAnimation === null ||
+          newName === "" ||
+          newName === selectedAtlasAnimation
+        )
+          return;
+        const oldName = selectedAtlasAnimation;
+        selectedAtlasAnimation = newName;
+        atlasDoc.apply((atlas) => {
+          const animation = atlas.animations.find((a) => a.name === oldName);
+          if (animation) animation.name = newName;
+        });
+      },
+      onRenameSprite: (newName) => {
+        const atlasDoc = activeAtlasDoc();
+        if (!atlasDoc || selectedSprite === null || newName === "" || newName === selectedSprite)
+          return;
+        const oldName = selectedSprite;
+        selectedSprite = newName;
+        stage.selectedSprite = newName;
+        atlasDoc.apply((atlas) => {
+          const sprite = atlas.sprites.find((s) => s.name === oldName);
+          if (sprite) sprite.name = newName;
+          // Animations reference frames by sprite name — renames follow.
+          for (const animation of atlas.animations) {
+            animation.frames = animation.frames.map((f) => (f === oldName ? newName : f));
+          }
+        });
+      },
+      onRename: (newId) => {
+        if (selection?.type !== "sheet" && selection?.type !== "tileset") return;
+        const current = selection;
+        if (newId === "" || newId === current.id) return;
+        // Selection first, mutation second: the doc's change notification then
+        // re-renders once, already pointing at the renamed entry.
+        selection = { type: current.type, id: newId };
+        doc.apply((instructions) => {
+          if (current.type === "sheet") {
+            const sheet = instructions.sheets.find((s) => s.id === current.id);
+            if (sheet) sheet.id = newId;
+          } else {
+            const tileset = instructions.tilesets.find((t) => t.id === current.id);
+            if (tileset) tileset.id = newId;
+          }
+        });
+      },
+      onDeleteEntry: () => {
+        if (selection?.type !== "sheet" && selection?.type !== "tileset") return;
+        const current = selection;
+        doc.apply((instructions) => {
+          if (current.type === "sheet")
+            instructions.sheets = instructions.sheets.filter((s) => s.id !== current.id);
+          else instructions.tilesets = instructions.tilesets.filter((t) => t.id !== current.id);
+        });
+        select(null);
+      },
     },
-    onRename: (newId) => {
-      if (selection?.type !== "sheet" && selection?.type !== "tileset") return;
-      const current = selection;
-      if (newId === "" || newId === current.id) return;
-      // Selection first, mutation second: the doc's change notification then
-      // re-renders once, already pointing at the renamed entry.
-      selection = { type: current.type, id: newId };
-      doc.apply((instructions) => {
-        if (current.type === "sheet") {
-          const sheet = instructions.sheets.find((s) => s.id === current.id);
-          if (sheet) sheet.id = newId;
-        } else {
-          const tileset = instructions.tilesets.find((t) => t.id === current.id);
-          if (tileset) tileset.id = newId;
-        }
-      });
-    },
-    onDeleteEntry: () => {
-      if (selection?.type !== "sheet" && selection?.type !== "tileset") return;
-      const current = selection;
-      doc.apply((instructions) => {
-        if (current.type === "sheet")
-          instructions.sheets = instructions.sheets.filter((s) => s.id !== current.id);
-        else instructions.tilesets = instructions.tilesets.filter((t) => t.id !== current.id);
-      });
-      select(null);
-    },
-  });
+  );
   renderCenter();
   renderRibbon();
   renderToolbar();
@@ -517,6 +592,18 @@ function watchAtlasDoc(atlasDoc: AtlasDoc): AtlasDoc {
       selectedSprite = null;
       stage.selectedSprite = null;
       loupe.setAnimation(null, null);
+    }
+    // Same for the open animation (e.g. undoing its creation, or a rename
+    // racing this exact edit) — and when it survives, the loupe's plan is
+    // stale the moment a frame is added/reordered/removed, so rebuild it.
+    if (selectedAtlasAnimation !== null) {
+      const animation = atlasDoc.atlas.animations.find((a) => a.name === selectedAtlasAnimation);
+      if (!animation) {
+        selectedAtlasAnimation = null;
+        loupe.setAnimation(null, null);
+      } else {
+        loupe.setAnimation(cachedImage(atlasDoc.atlas.image), planAtlasAnimation(atlasDoc.atlas, animation));
+      }
     }
     renderAll();
   });
@@ -830,7 +917,22 @@ function wire(): void {
         : `cell ${info.column},${info.row} · ${rect}` + (info.animation ? ` · ${info.animation}` : "");
   };
   stage.onPickAnimation = (name) => selectAnimation(name);
-  stage.onPickSprite = (name) => selectSprite(name);
+  stage.onPickSprite = (name) => {
+    // While an atlas animation is open, clicking a cell appends it as a
+    // frame instead of changing the sprite editor's selection — this is the
+    // primary way to build a frame list (typing sprite names by hand is the
+    // fallback for anyone who prefers it).
+    const atlasDoc = activeAtlasDoc();
+    if (atlasDoc && selectedAtlasAnimation !== null && name !== null) {
+      const openName = selectedAtlasAnimation;
+      atlasDoc.apply((atlas) => {
+        const animation = atlas.animations.find((a) => a.name === openName);
+        if (animation) animation.frames.push(name);
+      });
+      return;
+    }
+    selectSprite(name);
+  };
   stage.onWheelZoom = (direction, e) => wheelZoom(direction, e);
 
   atlasCanvas.addEventListener("mousemove", (e) => {

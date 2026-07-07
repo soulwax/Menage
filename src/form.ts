@@ -4,7 +4,7 @@
 
 import type { AtlasDoc, MenageDoc } from "./doc";
 import type { AnimationDef, SheetDef, TilesetDef } from "./instructions";
-import type { AtlasFile, AtlasSprite } from "./atlasfile";
+import { swapAnimationFrames, type AtlasAnimation, type AtlasFile, type AtlasSprite } from "./atlasfile";
 
 export type Selection =
   | { type: "sheet"; id: string }
@@ -21,6 +21,11 @@ export interface InspectorHooks {
   onRename: (newId: string) => void;
   /** Same convention for the selected atlas sprite. */
   onRenameSprite: (newName: string) => void;
+  /** Open (or close, on null) an atlas animation for editing — drives the
+   *  loupe preview and the stage's "add frame" click mode. */
+  onSelectAtlasAnimation: (name: string | null) => void;
+  /** Same rename-before-mutate convention, for the open atlas animation. */
+  onRenameAtlasAnimation: (newName: string) => void;
 }
 
 const SHEET_KINDS = ["character", "tile_animation", "object_animation", "particle"];
@@ -98,6 +103,7 @@ export function renderInspector(
   selectedAnimation: string | null,
   atlasDoc: AtlasDoc | null,
   selectedSprite: string | null,
+  selectedAtlasAnimation: string | null,
   hooks: InspectorHooks,
 ): void {
   host.textContent = "";
@@ -110,7 +116,7 @@ export function renderInspector(
   }
 
   if (selection.type === "atlasfile") {
-    if (atlasDoc) host.append(atlasForm(atlasDoc, selectedSprite, hooks));
+    if (atlasDoc) host.append(atlasForm(atlasDoc, selectedSprite, selectedAtlasAnimation, hooks));
     return;
   }
 
@@ -132,6 +138,7 @@ export function renderInspector(
 function atlasForm(
   atlasDoc: AtlasDoc,
   selectedSprite: string | null,
+  selectedAnimation: string | null,
   hooks: InspectorHooks,
 ): DocumentFragment {
   const atlas = atlasDoc.atlas;
@@ -166,14 +173,53 @@ function atlasForm(
     field("gutter", numberPair(atlas.paddingX, atlas.paddingY, "atlas.padding", (x, y) => edit((a) => { a.paddingX = x; a.paddingY = y; })), "padding_x / padding_y between cells"),
   );
 
-  if (atlas.animations.length > 0) {
-    const facts = document.createElement("pre");
-    facts.className = "atlas-facts";
-    facts.textContent =
-      `animations  ${atlas.animations.length} (preserved verbatim on save)\n` +
-      atlas.animations.map((a) => `  ${a.name} · ${a.frames.length}f`).join("\n");
-    frag.append(facts);
+  // Animations: a name roster plus one focused editor (frame reorder/add/
+  // remove, fps/duration), the same "one open thing" shape as sprites below.
+  const animHead = document.createElement("div");
+  animHead.className = "lib-group-head";
+  const animTitle = document.createElement("h3");
+  animTitle.textContent = `Animations (${atlas.animations.length})`;
+  const addAnimButton = document.createElement("button");
+  addAnimButton.className = "mini ghost";
+  addAnimButton.textContent = "+ add";
+  addAnimButton.addEventListener("click", () => {
+    let name = `animation_${atlas.animations.length}`;
+    let n = atlas.animations.length;
+    while (atlas.animations.some((a) => a.name === name)) name = `animation_${++n}`;
+    edit((a) => {
+      a.animations.push({ name, frames: [], fps: 8, frameDurationMs: null });
+    });
+    hooks.onSelectAtlasAnimation(name);
+  });
+  animHead.append(animTitle, addAnimButton);
+  frag.append(animHead);
+
+  if (atlas.animations.length === 0) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = "No animations yet.";
+    frag.append(p);
+  } else {
+    const animList = document.createElement("ul");
+    animList.className = "lib-list";
+    for (const animation of atlas.animations) {
+      const li = document.createElement("li");
+      li.textContent = animation.name;
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      meta.textContent = `${animation.frames.length}f`;
+      li.append(meta);
+      if (animation.name === selectedAnimation) li.classList.add("selected");
+      li.addEventListener("click", () =>
+        hooks.onSelectAtlasAnimation(animation.name === selectedAnimation ? null : animation.name),
+      );
+      animList.append(li);
+    }
+    frag.append(animList);
   }
+
+  const openAnimation = atlas.animations.find((a) => a.name === selectedAnimation);
+  if (openAnimation) frag.append(atlasAnimationEditor(atlasDoc, openAnimation, hooks));
 
   // The one focused sprite editor.
   const spritesHead = document.createElement("div");
@@ -288,6 +334,113 @@ function atlasForm(
   }
   frag.append(list);
   return frag;
+}
+
+/** The focused editor for one open atlas animation: rename, fps/duration,
+ *  and the frame list — reorder (up/down), remove, and add by name (the
+ *  primary "add" path is clicking a cell on the stage; see main.ts's
+ *  frame-picker mode, wired through onSelectAtlasAnimation being non-null). */
+function atlasAnimationEditor(
+  atlasDoc: AtlasDoc,
+  animation: AtlasAnimation,
+  hooks: InspectorHooks,
+): HTMLFieldSetElement {
+  const atlas = atlasDoc.atlas;
+  const name = animation.name;
+  const editAnimation = (mutate: (a: AtlasAnimation) => void) =>
+    atlasDoc.apply((current) => {
+      const target = current.animations.find((a) => a.name === name);
+      if (target) mutate(target);
+    });
+
+  const set = document.createElement("fieldset");
+  set.className = "animation selected";
+  const legend = document.createElement("legend");
+  legend.textContent = `▶ ${animation.name}`;
+  legend.title = "Click a cell on the stage to append it as a frame";
+  set.append(legend);
+
+  set.append(
+    field("name", textInput(animation.name, "atlasanim.name", (v) => hooks.onRenameAtlasAnimation(v))),
+    field("fps", numberInput(animation.fps ?? 8, "atlasanim.fps", (v) => editAnimation((a) => (a.fps = v)))),
+    field(
+      "duration ms",
+      numberInput(animation.frameDurationMs ?? 0, "atlasanim.duration", (v) =>
+        editAnimation((a) => (a.frameDurationMs = v > 0 ? v : null)),
+      ),
+      "alternative to fps; 0 clears it",
+    ),
+  );
+
+  const frameHead = document.createElement("div");
+  frameHead.className = "lib-group-head";
+  const frameTitle = document.createElement("h3");
+  frameTitle.textContent = `Frames (${animation.frames.length})`;
+  frameHead.append(frameTitle);
+  set.append(frameHead);
+
+  if (animation.frames.length === 0) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = "No frames yet — click a cell on the stage to add one.";
+    set.append(p);
+  }
+
+  animation.frames.forEach((frameName, index) => {
+    const row = document.createElement("div");
+    row.className = "frame-row";
+    const label = document.createElement("span");
+    label.className = "frame-name";
+    label.textContent = frameName;
+    if (!atlas.sprites.some((s) => s.name === frameName)) {
+      label.classList.add("frame-missing");
+      label.title = "No sprite named this — the game will reject it";
+    }
+    row.append(label);
+
+    const up = document.createElement("button");
+    up.className = "mini ghost";
+    up.textContent = "↑";
+    up.disabled = index === 0;
+    up.addEventListener("click", () =>
+      editAnimation((a) => swapAnimationFrames(a, index, index - 1)),
+    );
+
+    const down = document.createElement("button");
+    down.className = "mini ghost";
+    down.textContent = "↓";
+    down.disabled = index === animation.frames.length - 1;
+    down.addEventListener("click", () =>
+      editAnimation((a) => swapAnimationFrames(a, index, index + 1)),
+    );
+
+    const remove = document.createElement("button");
+    remove.className = "mini danger";
+    remove.textContent = "×";
+    remove.title = "Remove this frame";
+    remove.addEventListener("click", () => editAnimation((a) => a.frames.splice(index, 1)));
+
+    row.append(up, down, remove);
+    set.append(row);
+  });
+
+  const closeButton = document.createElement("button");
+  closeButton.className = "small ghost";
+  closeButton.textContent = "close";
+  closeButton.addEventListener("click", () => hooks.onSelectAtlasAnimation(null));
+
+  const removeButton = document.createElement("button");
+  removeButton.className = "mini danger";
+  removeButton.textContent = "remove animation";
+  removeButton.addEventListener("click", () => {
+    hooks.onSelectAtlasAnimation(null);
+    atlasDoc.apply((current) => {
+      current.animations = current.animations.filter((a) => a.name !== name);
+    });
+  });
+
+  set.append(closeButton, removeButton);
+  return set;
 }
 
 /** Two small number inputs sharing one field row (x/y, w/h pairs). */

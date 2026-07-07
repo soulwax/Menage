@@ -8,6 +8,8 @@ import {
   rectForIndex,
   serializeAtlasFile,
   spriteAt,
+  swapAnimationFrames,
+  type AtlasAnimation,
 } from "./atlasfile";
 
 const ATLAS_SAMPLE = `
@@ -170,6 +172,81 @@ describe("serializeAtlasFile — full fidelity against the real game files", () 
     atlas.sprites[0].name = "renamed_without_frames";
     const findings = lintAtlas(atlas);
     expect(findings.some((f) => f.message.includes("names no declared sprite"))).toBe(true);
+  });
+});
+
+describe("swapAnimationFrames", () => {
+  function animation(frames: string[]): AtlasAnimation {
+    return { name: "walk", frames, fps: 8, frameDurationMs: null };
+  }
+
+  it("swaps two frames by index (the up/down reorder buttons)", () => {
+    const a = animation(["a", "b", "c"]);
+    swapAnimationFrames(a, 0, 1);
+    expect(a.frames).toEqual(["b", "a", "c"]);
+    swapAnimationFrames(a, 1, 2);
+    expect(a.frames).toEqual(["b", "c", "a"]);
+  });
+
+  it("is a no-op for equal, negative, or out-of-range indices", () => {
+    const a = animation(["a", "b"]);
+    swapAnimationFrames(a, 0, 0);
+    expect(a.frames).toEqual(["a", "b"]);
+    swapAnimationFrames(a, -1, 0);
+    expect(a.frames).toEqual(["a", "b"]);
+    swapAnimationFrames(a, 0, 5);
+    expect(a.frames).toEqual(["a", "b"]);
+  });
+
+  it("guards the first/last frame against the disabled up/down buttons firing anyway", () => {
+    const a = animation(["only"]);
+    swapAnimationFrames(a, 0, -1); // "up" from index 0
+    swapAnimationFrames(a, 0, 1); // "down" from the last index
+    expect(a.frames).toEqual(["only"]);
+  });
+});
+
+describe("animation editing round-trips through serialize/parse", () => {
+  const image = "Assets/Graphics/sprites/objects/barrel.png";
+
+  it("a hand-built animation with add/reorder/remove serializes and reparses losslessly", () => {
+    const atlas = createDescriptor("x.toml", image, { width: 96, height: 32 });
+    atlas.animations.push({ name: "spin", frames: [], fps: 12, frameDurationMs: null });
+    const spin = atlas.animations[0];
+    spin.frames.push(atlas.sprites[0].name, atlas.sprites[1].name, atlas.sprites[2].name);
+    swapAnimationFrames(spin, 0, 2); // reorder: [2, 1, 0]
+    spin.frames.splice(1, 1); // remove the middle frame: [2, 0]
+
+    expect(spin.frames).toEqual([atlas.sprites[2].name, atlas.sprites[0].name]);
+    expect(lintAtlas(atlas).filter((f) => f.level === "error")).toEqual([]);
+
+    const reparsed = parseAtlasFile(atlas.path, serializeAtlasFile(atlas))!;
+    expect(reparsed.animations).toEqual(atlas.animations);
+  });
+
+  it("frame_duration_ms survives when fps is cleared, and vice versa", () => {
+    const atlas = createDescriptor("x.toml", image, { width: 96, height: 32 });
+    atlas.animations.push({
+      name: "slow",
+      frames: [atlas.sprites[0].name],
+      fps: null,
+      frameDurationMs: 250,
+    });
+    const reparsed = parseAtlasFile(atlas.path, serializeAtlasFile(atlas))!;
+    expect(reparsed.animations[0]).toEqual({
+      name: "slow",
+      frames: [atlas.sprites[0].name],
+      fps: null,
+      frameDurationMs: 250,
+    });
+  });
+
+  it("an animation with zero frames is preserved (lint flags it; serialize never drops it)", () => {
+    const atlas = createDescriptor("x.toml", image, { width: 96, height: 32 });
+    atlas.animations.push({ name: "empty", frames: [], fps: 8, frameDurationMs: null });
+    const reparsed = parseAtlasFile(atlas.path, serializeAtlasFile(atlas))!;
+    expect(reparsed.animations).toEqual(atlas.animations);
+    expect(lintAtlas(atlas).some((f) => f.message.includes("declares no frames"))).toBe(true);
   });
 });
 

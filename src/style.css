@@ -472,6 +472,29 @@ fieldset.animation legend:hover {
   color: var(--gold-lit);
 }
 
+.frame-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 2px;
+  border-bottom: 1px solid var(--line);
+}
+.frame-row:last-of-type {
+  border-bottom: none;
+}
+.frame-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+.frame-name.frame-missing {
+  color: var(--danger);
+}
+
 .delete-entry {
   margin-top: 10px;
 }
