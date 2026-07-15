@@ -109,6 +109,14 @@ fn default_game_root() -> String {
     std::env::var("MENAGE_GAME_ROOT").unwrap_or_default()
 }
 
+/// Default `universal.key` path for an encrypted `data.pak`. Empty means
+/// unset — `asset_pack_list` then omits `--key` entirely, matching how the
+/// game itself treats an absent key: the pack is read unencrypted.
+#[tauri::command]
+fn default_key_path() -> String {
+    std::env::var("MENAGE_ASSET_KEY_PATH").unwrap_or_default()
+}
+
 #[tauri::command]
 fn read_text_file(game_root: String, rel: String) -> Result<String, String> {
     let path = resolve(&game_root, &rel)?;
@@ -118,7 +126,8 @@ fn read_text_file(game_root: String, rel: String) -> Result<String, String> {
 #[tauri::command]
 fn write_text_file(game_root: String, rel: String, contents: String) -> Result<String, String> {
     let path = resolve(&game_root, &rel)?;
-    std::fs::write(&path, contents).map_err(|e| format!("cannot write '{}': {e}", path.display()))?;
+    std::fs::write(&path, contents)
+        .map_err(|e| format!("cannot write '{}': {e}", path.display()))?;
     Ok(format!("wrote {}", path.display()))
 }
 
@@ -225,9 +234,20 @@ fn cutter_cut(game_root: String, sheet: Option<String>) -> Result<String, String
     run_cli(&cutter_bin(), &game_root, &arg_refs)
 }
 
+/// `key_path`: absolute path to the pack's `universal.key`, or empty/absent
+/// when the pack ships unencrypted. Forwarded as `asset_pack`'s own `--key`
+/// flag — menage never reads the key itself, it only tells `asset_pack`
+/// where to look, exactly like `asset_pack --key <path>` would from a
+/// terminal.
 #[tauri::command]
-fn asset_pack_list(game_root: String) -> Result<String, String> {
-    run_cli(&asset_pack_bin(), &game_root, &["--dry-run", "--list"])
+fn asset_pack_list(game_root: String, key_path: Option<String>) -> Result<String, String> {
+    let mut args = vec!["--dry-run".to_string(), "--list".to_string()];
+    if let Some(key_path) = key_path.filter(|value| !value.trim().is_empty()) {
+        args.push("--key".to_string());
+        args.push(key_path);
+    }
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_cli(&asset_pack_bin(), &game_root, &arg_refs)
 }
 
 /// `sheets validate --json` on UNSAVED metadata text (temp file) — the game's
@@ -252,6 +272,25 @@ fn sheets_validate_json(
     result
 }
 
+fn main() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            default_game_root,
+            default_key_path,
+            read_text_file,
+            write_text_file,
+            read_file_base64,
+            list_files,
+            cutter_dry_run,
+            cutter_cut,
+            asset_pack_list,
+            sheets_validate_json,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running menage");
+}
+
 // The command fns above are plain functions; these tests exercise them the
 // way the webview does — including the real `sprite_cutter` binary when the
 // game repo has one built (tests skip gracefully when it is absent, matching
@@ -274,6 +313,18 @@ mod tests {
     fn cutter_exe(root: &str) -> Option<String> {
         let path = Path::new(root).join("target/debug/sprite_cutter.exe");
         let unix = Path::new(root).join("target/debug/sprite_cutter");
+        if path.exists() {
+            Some(path.to_string_lossy().into_owned())
+        } else if unix.exists() {
+            Some(unix.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    }
+
+    fn asset_pack_exe(root: &str) -> Option<String> {
+        let path = Path::new(root).join("target/debug/asset_pack.exe");
+        let unix = Path::new(root).join("target/debug/asset_pack");
         if path.exists() {
             Some(path.to_string_lossy().into_owned())
         } else if unix.exists() {
@@ -356,9 +407,11 @@ flip_x = false
         // 6 columns, start 4, 3 frames → the game forbids the row wrap.
         let wrapped = VALID_METADATA.replace("start_column = 0", "start_column = 4");
         let wrapped = wrapped.replace("frame_count = 6", "frame_count = 3");
-        let findings =
-            sheets_validate_json(root, wrapped, false).expect("--json always succeeds");
-        assert!(findings.contains("forbids row wrap"), "unexpected: {findings}");
+        let findings = sheets_validate_json(root, wrapped, false).expect("--json always succeeds");
+        assert!(
+            findings.contains("forbids row wrap"),
+            "unexpected: {findings}"
+        );
     }
 
     #[test]
@@ -370,8 +423,8 @@ flip_x = false
         };
         std::env::set_var("MENAGE_SPRITE_CUTTER_BIN", &cutter);
 
-        let report =
-            cutter_dry_run(root.clone(), None, Some(VALID_METADATA.into())).expect("valid metadata passes");
+        let report = cutter_dry_run(root.clone(), None, Some(VALID_METADATA.into()))
+            .expect("valid metadata passes");
         assert!(report.contains("would cut"), "unexpected report: {report}");
 
         // The cutter's own validation is the authority: a grid that disagrees
@@ -380,22 +433,46 @@ flip_x = false
         let err = cutter_dry_run(root, None, Some(bad)).expect_err("bad metadata fails");
         assert!(err.contains("expected"), "unexpected error: {err}");
     }
-}
 
-fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![
-            default_game_root,
-            read_text_file,
-            write_text_file,
-            read_file_base64,
-            list_files,
-            cutter_dry_run,
-            cutter_cut,
-            asset_pack_list,
-            sheets_validate_json,
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running menage");
+    #[test]
+    fn default_key_path_reads_the_env_var_and_defaults_to_empty() {
+        std::env::remove_var("MENAGE_ASSET_KEY_PATH");
+        assert_eq!(default_key_path(), "");
+        std::env::set_var("MENAGE_ASSET_KEY_PATH", "/some/universal.key");
+        assert_eq!(default_key_path(), "/some/universal.key");
+        std::env::remove_var("MENAGE_ASSET_KEY_PATH");
+    }
+
+    #[test]
+    fn asset_pack_list_omits_key_flag_when_unset_and_includes_it_when_set() {
+        let root = game_root();
+        let Some(bin) = asset_pack_exe(&root) else {
+            eprintln!("skipping: build asset_pack in the game repo first");
+            return;
+        };
+        std::env::set_var("MENAGE_ASSET_PACK_BIN", &bin);
+
+        // No key path (None) and an empty-string key path must both behave
+        // like "unset" — the pack ships unencrypted by default, so an
+        // absent/blank field must never turn into a spurious `--key ""`
+        // asset_pack would reject.
+        let no_key = asset_pack_list(root.clone(), None).expect("dry-run succeeds without a key");
+        let blank_key =
+            asset_pack_list(root.clone(), Some("   ".into())).expect("blank key treated as unset");
+        assert_eq!(
+            no_key, blank_key,
+            "None and blank key_path must behave identically"
+        );
+
+        // A key path that does not exist must surface as a real error from
+        // asset_pack itself (it tries to read the file), not a silent
+        // fallback to unencrypted — proving --key genuinely reached the CLI.
+        let bogus = root.clone() + "/definitely-not-a-real-key-file.key";
+        let err = asset_pack_list(root, Some(bogus.clone()))
+            .expect_err("a nonexistent key file must fail, proving --key was passed through");
+        assert!(
+            err.contains(&bogus) || err.to_lowercase().contains("key"),
+            "expected the key-file error to mention the path or 'key': {err}"
+        );
+    }
 }

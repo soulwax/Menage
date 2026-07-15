@@ -31,6 +31,9 @@ function el<T extends HTMLElement>(id: string): T {
 
 const doc = new MenageDoc();
 let gameRoot = "";
+/** universal.key path for an encrypted data.pak; empty means unset (the
+ *  audit runs asset_pack without --key, exactly like today). */
+let keyPath = "";
 let selection: Selection = null;
 let selectedAnimation: string | null = null;
 let selectedSprite: string | null = null;
@@ -417,6 +420,7 @@ function renderToolbar(): void {
     active instanceof AtlasDoc ? `${atlasStem(active.atlas.path)}.toml` : "spritesheets.toml";
   el("doc-name").textContent = (active.dirty ? "● " : "") + activeName;
   el("game-root").textContent = gameRoot === "" ? "pick game repo…" : gameRoot;
+  el("key-path").textContent = keyPath === "" ? "no key" : keyPath;
 }
 
 /** Rebuilding the inspector must not steal the keyboard: remember which input
@@ -770,7 +774,7 @@ async function runCut(sheetId: string | null): Promise<void> {
 
 async function runAudit(): Promise<void> {
   const pngs = await bridge.listGameFiles(gameRoot, SCAN_ROOT, "png");
-  const pack = await bridge.assetPackList(gameRoot);
+  const pack = await bridge.assetPackList(gameRoot, keyPath);
   const packList = pack.ok ? parsePackList(pack.output) : [];
   const audit = crossReference(doc.instructions, pngs, packList);
   unregistered = audit.unregistered;
@@ -1006,6 +1010,14 @@ function wire(): void {
   el("btn-add-tileset").addEventListener("click", () => addEntry("tileset"));
   el("btn-rescan").addEventListener("click", () => void scanUnregistered());
 
+  el("key-path").addEventListener("click", async () => {
+    const picked = await bridge.pickKeyPath();
+    if (picked) {
+      keyPath = picked;
+      renderAll();
+    }
+  });
+
   el("game-root").addEventListener("click", async () => {
     const picked = await bridge.pickGameRoot();
     if (picked) {
@@ -1039,6 +1051,7 @@ function wire(): void {
 async function start(): Promise<void> {
   wire();
   gameRoot = await bridge.defaultGameRoot();
+  keyPath = await bridge.defaultKeyPath();
   if ((await bridge.inTauri()) && gameRoot === "") {
     say(
       "No game repo configured.\nClick the path in the toolbar to pick your EchoWarrior root,\nor set MENAGE_GAME_ROOT before launching.",

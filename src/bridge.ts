@@ -67,6 +67,21 @@ export async function defaultGameRoot(): Promise<string> {
   }
 }
 
+/** Default `universal.key` path for an encrypted `data.pak`, from
+ *  MENAGE_ASSET_KEY_PATH. Empty means unset — the audit runs `asset_pack`
+ *  without `--key`, exactly as it does today, so unencrypted packs are
+ *  unaffected. Menage never reads the key itself; it only tells
+ *  `asset_pack` where to look. */
+export async function defaultKeyPath(): Promise<string> {
+  const invoke = await getInvoke();
+  if (!invoke) return "";
+  try {
+    return await invoke<string>("default_key_path", {});
+  } catch {
+    return "";
+  }
+}
+
 /** Read a repo-relative text file. */
 export async function readGameText(gameRoot: string, rel: string): Promise<BridgeResult> {
   const invoke = await getInvoke();
@@ -145,9 +160,11 @@ export function cutterCut(gameRoot: string, sheetId: string | null): Promise<Bri
   return call("cutter_cut", { gameRoot, sheet: sheetId });
 }
 
-/** `asset_pack --dry-run --list` — the ship audit's ground truth. */
-export function assetPackList(gameRoot: string): Promise<BridgeResult> {
-  return call("asset_pack_list", { gameRoot });
+/** `asset_pack --dry-run --list` — the ship audit's ground truth. `keyPath`
+ *  is the `universal.key` file for an encrypted pack; omit or pass an empty
+ *  string for an unencrypted one (the default). */
+export function assetPackList(gameRoot: string, keyPath?: string): Promise<BridgeResult> {
+  return call("asset_pack_list", { gameRoot, keyPath: keyPath ?? null });
 }
 
 /** The game's own validator (`sheets validate --json`) on UNSAVED metadata
@@ -176,6 +193,23 @@ export async function pickGameRoot(): Promise<string | null> {
   try {
     const dialog = await import("@tauri-apps/plugin-dialog");
     const picked = await dialog.open({ directory: true, title: "Pick the EchoWarrior repo root" });
+    return typeof picked === "string" ? picked : null;
+  } catch {
+    return null;
+  }
+}
+
+/** File picker for `data.pak`'s `universal.key` (Tauri only); null when
+ *  unavailable or cancelled. */
+export async function pickKeyPath(): Promise<string | null> {
+  if (!(await inTauri())) return null;
+  try {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    const picked = await dialog.open({
+      directory: false,
+      multiple: false,
+      title: "Pick data.pak's universal.key (leave unset for an unencrypted pack)",
+    });
     return typeof picked === "string" ? picked : null;
   } catch {
     return null;
